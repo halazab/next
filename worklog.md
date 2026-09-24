@@ -168,3 +168,18 @@ Work Log:
 
 Stage Summary:
 - Chart panning now free in both directions like TradingView; horizontal axis zoom direction matches TV
+
+---
+Task ID: vpan
+Agent: Main Agent
+Task: Free vertical chart panning (any-direction drag, TV-style)
+
+Work Log:
+- engine.ts: added vFrozen manual price scale — first vertical drag (>2px) disengages auto-fit and freezes the scale, which then follows the pointer (content-follows-finger, d = dy * range/(plotH-10)); re-anchored on each new mousedown when already frozen
+- priceRange returns frozen scale when set; reset paths: double-click price axis, symbol/timeframe change (setData)
+- Horizontal pan logic untouched; trade-line drag and axis scaling unaffected
+- Verified desktop: drag down 150px (content follows down), up 300px free, diagonal drag moves both axes, dblclick price axis re-fits
+- tsc/eslint clean, no console errors
+
+Stage Summary:
+- Chart now pans freely in any direction like TradingView; auto-fit disengages on vertical drag and returns via dblclick on the price axis

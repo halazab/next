@@ -83,7 +83,14 @@ export class ChartEngine {
 
   private crosshair: { x: number; y: number } | null = null;
   private countdownTimer: ReturnType<typeof setInterval> | null = null;
-  private drag: { startX: number; startOffset: number } | null = null;
+  private drag: { startX: number; startOffset: number; startY: number } | null = null;
+  /** vertical pan — TV-style: the first vertical drag disengages auto-fit
+   *  and freezes the price scale (follows the pointer) until it is reset
+   *  via double-click on the price axis or a new symbol/timeframe */
+  private vFrozen: { min: number; max: number } | null = null;
+  private frozenBase: { min: number; max: number } | null = null;
+  private vAnchorY = 0;
+  private vPpp = 0;
   /** TradingView-style vertical compression of the price scale (1 = auto-fit) */
   priceScaleK = 1;
   /** axis currently being dragged to scale the chart ("time" = horizontal
@@ -160,6 +167,8 @@ export class ChartEngine {
     this.rightOffset = 0;
     this.autoScroll = true;
     this.priceScaleK = 1; // fresh auto-fit for the new symbol / timeframe
+    this.vFrozen = null; // re-engage vertical auto-fit
+    this.frozenBase = null;
     this.invalidate();
   }
 
@@ -241,7 +250,13 @@ export class ChartEngine {
       this.dragLineId = hit.id;
       return;
     }
-    this.drag = { startX: x, startOffset: this.rightOffset };
+    this.drag = { startX: x, startOffset: this.rightOffset, startY: y };
+    // already scrolled vertically once → re-anchor the frozen-scale pan
+    if (this.vFrozen) {
+      this.frozenBase = { ...this.vFrozen };
+      this.vAnchorY = y;
+      this.vPpp = (this.vFrozen.max - this.vFrozen.min) / (this.height - PAD_BOTTOM - 10);
+    }
   }
 
   onMouseMove(x: number, y: number, dragging: boolean): void {
@@ -282,6 +297,7 @@ export class ChartEngine {
     }
     if (dragging && this.drag) {
       const dx = x - this.drag.startX;
+      const dy = y - this.drag.startY;
       const slots = dx / this.barWidth;
       const plotW = this.width - PAD_RIGHT;
       const maxOffset = Math.max(0, this.candles.length - Math.floor(plotW / this.barWidth) - 1);
@@ -294,6 +310,18 @@ export class ChartEngine {
       // pinned to the live edge only when the newest candle sits at its
       // default position — scrolled either way resumes/stops it naturally
       this.autoScroll = this.rightOffset === 0;
+      // vertical component — the first real vertical movement disengages
+      // auto-fit (TV behaviour); afterwards the scale follows the pointer
+      if (this.vFrozen === null && Math.abs(dy) > 2) {
+        this.vFrozen = { ...this.scale };
+        this.frozenBase = { ...this.scale };
+        this.vAnchorY = y;
+        this.vPpp = (this.scale.max - this.scale.min) / (this.height - PAD_BOTTOM - 10);
+      }
+      if (this.vFrozen && this.frozenBase) {
+        const d = (y - this.vAnchorY) * this.vPpp;
+        this.vFrozen = { min: this.frozenBase.min + d, max: this.frozenBase.max + d };
+      }
       this.invalidate();
       this.onViewChange();
       return;
@@ -343,12 +371,14 @@ export class ChartEngine {
   }
 
   /** double-click on an axis resets it — TV/MT5 behaviour:
-   *  price axis → auto-fit, time axis → default zoom + scroll to end */
+   *  price axis → re-engage auto-fit, time axis → default zoom + scroll to end */
   onDblClick(x: number, y: number): void {
     const plotW = this.width - PAD_RIGHT;
     const plotH = this.height - PAD_BOTTOM;
     if (x > plotW && y <= plotH) {
       this.priceScaleK = 1;
+      this.vFrozen = null; // back to vertical auto-fit
+      this.frozenBase = null;
     } else if (y > plotH) {
       this.barWidth = 9;
       this.rightOffset = 0;
@@ -393,6 +423,8 @@ export class ChartEngine {
   private indicatorSeries: (number | null)[][] = [];
 
   private priceRange(left: number, right: number): { min: number; max: number } {
+    // vertically scrolled once → the scale stays frozen (manual mode)
+    if (this.vFrozen) return this.vFrozen;
     let min = Infinity;
     let max = -Infinity;
     for (let i = Math.max(0, left); i <= Math.min(this.candles.length - 1, right); i += 1) {
