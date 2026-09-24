@@ -52,3 +52,7 @@ prompt
 server.log
 # Skills directory
 /skills/
+# local env & runtime data
+.env
+db/
+.mt5-server-state.json
