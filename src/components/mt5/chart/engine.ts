@@ -84,6 +84,14 @@ export class ChartEngine {
   private crosshair: { x: number; y: number } | null = null;
   private countdownTimer: ReturnType<typeof setInterval> | null = null;
   private drag: { startX: number; startOffset: number } | null = null;
+  /** TradingView-style vertical compression of the price scale (1 = auto-fit) */
+  priceScaleK = 1;
+  /** axis currently being dragged to scale the chart ("time" = horizontal
+   *  bar-width zoom, "price" = vertical compression) */
+  private dragAxis: 'time' | 'price' | null = null;
+  private axisStart = 0;
+  private axisStartBar = 9;
+  private axisStartK = 1;
   /** id of the trade line currently being dragged, if any */
   private dragLineId: string | null = null;
   /** last rendered price scale — used for pointer↔price mapping */
@@ -151,6 +159,7 @@ export class ChartEngine {
     this.candles = candles;
     this.rightOffset = 0;
     this.autoScroll = true;
+    this.priceScaleK = 1; // fresh auto-fit for the new symbol / timeframe
     this.invalidate();
   }
 
@@ -209,6 +218,23 @@ export class ChartEngine {
   }
 
   onMouseDown(x: number, y: number): void {
+    const plotW = this.width - PAD_RIGHT;
+    const plotH = this.height - PAD_BOTTOM;
+    // TradingView-style axis scaling: grabbing an axis scales the chart
+    if (x > plotW && y <= plotH) {
+      this.dragAxis = 'price';
+      this.axisStart = y;
+      this.axisStartK = this.priceScaleK;
+      this.canvas.style.cursor = 'ns-resize';
+      return;
+    }
+    if (y > plotH) {
+      this.dragAxis = 'time';
+      this.axisStart = x;
+      this.axisStartBar = this.barWidth;
+      this.canvas.style.cursor = 'ew-resize';
+      return;
+    }
     // grabbing a trade line takes precedence over chart panning
     const hit = this.hitLine(x, y);
     if (hit) {
@@ -219,6 +245,27 @@ export class ChartEngine {
   }
 
   onMouseMove(x: number, y: number, dragging: boolean): void {
+    // time-axis drag → horizontal zoom (bar width), TV-style exponential feel
+    if (dragging && this.dragAxis === 'time') {
+      const dx = x - this.axisStart;
+      const next = this.axisStartBar * Math.pow(2, dx / 120); // ~120px = 2x
+      this.barWidth = Math.min(48, Math.max(2.2, next));
+      if (this.autoScroll) this.rightOffset = 0;
+      this.canvas.style.cursor = 'ew-resize';
+      this.invalidate();
+      this.onViewChange();
+      return;
+    }
+    // price-axis drag → vertical compression: down compresses (zoom out,
+    // more range in view), up stretches (zoom in) — around the centre
+    if (dragging && this.dragAxis === 'price') {
+      const dy = y - this.axisStart;
+      const next = this.axisStartK * Math.pow(2, dy / 120);
+      this.priceScaleK = Math.min(12, Math.max(0.15, next));
+      this.canvas.style.cursor = 'ns-resize';
+      this.invalidate();
+      return;
+    }
     // live re-pricing of a grabbed trade line
     if (this.dragLineId) {
       const line = this.tradeLines.find((l) => l.id === this.dragLineId);
@@ -257,8 +304,11 @@ export class ChartEngine {
     } else {
       this.crosshair = null;
     }
-    // resize cursor over draggable trade lines
-    this.canvas.style.cursor = this.hitLine(x, y) ? 'ns-resize' : '';
+    // resize cursors over the axes and draggable trade lines (TV affordance)
+    const plotH = this.height - PAD_BOTTOM;
+    if (x > plotW && y <= plotH) this.canvas.style.cursor = 'ns-resize';
+    else if (y > plotH) this.canvas.style.cursor = 'ew-resize';
+    else this.canvas.style.cursor = this.hitLine(x, y) ? 'ns-resize' : '';
     // hover callback
     const idx = this.indexAtX(x);
     this.onHover(idx !== null && this.candles[idx] ? this.candles[idx] : null);
@@ -268,6 +318,7 @@ export class ChartEngine {
   onMouseLeave(): void {
     this.crosshair = null;
     this.drag = null;
+    this.dragAxis = null;
     // cancel any line drag without committing (line snaps back on re-sync)
     this.dragLineId = null;
     this.canvas.style.cursor = '';
@@ -287,6 +338,24 @@ export class ChartEngine {
       return;
     }
     this.drag = null;
+    this.dragAxis = null;
+    this.canvas.style.cursor = '';
+  }
+
+  /** double-click on an axis resets it — TV/MT5 behaviour:
+   *  price axis → auto-fit, time axis → default zoom + scroll to end */
+  onDblClick(x: number, y: number): void {
+    const plotW = this.width - PAD_RIGHT;
+    const plotH = this.height - PAD_BOTTOM;
+    if (x > plotW && y <= plotH) {
+      this.priceScaleK = 1;
+    } else if (y > plotH) {
+      this.barWidth = 9;
+      this.rightOffset = 0;
+      this.autoScroll = true;
+    }
+    this.invalidate();
+    this.onViewChange();
   }
 
   scrollToEnd(): void {
@@ -345,7 +414,16 @@ export class ChartEngine {
     }
     if (!isFinite(min) || !isFinite(max)) return { min: 0, max: 1 };
     const pad = (max - min) * 0.08 || max * 0.002;
-    return { min: min - pad, max: max + pad };
+    min -= pad;
+    max += pad;
+    // TradingView-style price-axis scaling — expand/compress the auto-fit
+    // range around its centre (drag the right axis up/down)
+    if (this.priceScaleK !== 1) {
+      const c = (min + max) / 2;
+      const half = ((max - min) / 2) * this.priceScaleK;
+      return { min: c - half, max: c + half };
+    }
+    return { min, max };
   }
 
   private computeIndicators(): void {

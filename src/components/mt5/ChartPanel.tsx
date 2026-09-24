@@ -38,9 +38,18 @@ export function ChartPanel({ countdown = false }: { countdown?: boolean }) {
   // ---- create engine once --------------------------------------------------
   useEffect(() => {
     if (!canvasRef.current) return;
-    const engine = new ChartEngine(canvasRef.current, SCHEMES[app.scheme]);
+    const canvas = canvasRef.current;
+    const engine = new ChartEngine(canvas, SCHEMES[app.scheme]);
     engineRef.current = engine;
     engine.onHover = (c) => setHover(c ? { ...c } : null);
+
+    // native non-passive wheel listener — React's onWheel is passive and
+    // cannot preventDefault, which breaks page-scroll suppression while zooming
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      engine.onWheel(e.deltaY);
+    };
+    canvas.addEventListener('wheel', onWheelNative, { passive: false });
 
     const ro = new ResizeObserver(() => {
       if (wrapRef.current) {
@@ -51,7 +60,10 @@ export function ChartPanel({ countdown = false }: { countdown?: boolean }) {
       ro.observe(wrapRef.current);
       engine.resize(wrapRef.current.clientWidth, wrapRef.current.clientHeight);
     }
-    return () => ro.disconnect();
+    return () => {
+      canvas.removeEventListener('wheel', onWheelNative);
+      ro.disconnect();
+    };
   }, []);
 
   // ---- sync engine config ---------------------------------------------------
@@ -253,9 +265,9 @@ export function ChartPanel({ countdown = false }: { countdown?: boolean }) {
     engineRef.current?.onMouseUp();
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    engineRef.current?.onWheel(e.deltaY);
+  const onDblClick = (e: React.MouseEvent) => {
+    const { x, y } = toLocal(e);
+    engineRef.current?.onDblClick(x, y);
   };
 
   // ---- touch events (mobile) — 1 finger pans, 2 fingers pinch-zoom --------
@@ -363,11 +375,11 @@ export function ChartPanel({ countdown = false }: { countdown?: boolean }) {
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
+          onDoubleClick={onDblClick}
           onMouseLeave={() => {
             dragRef.current.dragging = false;
             engineRef.current?.onMouseLeave();
           }}
-          onWheel={onWheel}
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}

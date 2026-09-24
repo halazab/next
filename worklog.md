@@ -138,3 +138,19 @@ Work Log:
 Stage Summary:
 - Repo live at https://github.com/halazab/next
 - .env confirmed absent from repo (404), no secrets pushed
+
+---
+Task ID: axis-zoom
+Agent: Main Agent
+Task: TradingView-style axis-drag zoom (time axis horizontal, price axis vertical) + push to GitHub
+
+Work Log:
+- engine.ts: added priceScaleK (vertical compression applied in priceRange around centre), dragAxis state, axis hit-zones in onMouseDown, exponential drag scaling (2^(d/120)) in onMouseMove, cursors (ew/ns-resize), onDblClick reset (price → auto-fit, time → default zoom), reset K on setData
+- ChartPanel.tsx: native non-passive wheel listener (React onWheel is passive, preventDefault unreliable), onDoubleClick wiring
+- Verified desktop 1440x900: time-axis drag widens candles, price-axis down compresses (range expands) / up stretches, dblclick resets both
+- Fixed initial price-axis direction to match TradingView (down = compress/zoom-out)
+- Verified mobile 390x844 via dispatched TouchEvents: both axes scale, countdown tag still renders
+- tsc/eslint clean, no console errors
+
+Stage Summary:
+- TV-style axis scaling works on desktop mouse + mobile touch, desktop pixels unchanged elsewhere

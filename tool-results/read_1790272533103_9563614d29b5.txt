@@ -1,0 +1,730 @@
+     1→// MT5-style canvas chart engine — replicates MetaTrader 5 chart rendering:
+     2→// hollow/solid candles, OHLC bars, grid, period separators, bid line with
+     3→// axis tag, crosshair, price/time scales and live tick building.
+     4→
+     5→import type { ChartScheme, ChartType } from '@/stores/app';
+     6→import type { Candle } from '@/lib/tv/candles';
+     7→import { fmtDayLabel, fmtDayLabelYear, fmtClock } from '@/lib/format';
+     8→
+     9→export interface EngineIndicator {
+    10→  id: string;
+    11→  type: 'ma';
+    12→  label: string;
+    13→  period: number;
+    14→  method: 'sma' | 'ema';
+    15→  color: string;
+    16→}
+    17→
+    18→/** horizontal trade level drawn over the plot (MT5 trade lines):
+    19→ *  position entries, S/L, T/P and pending-order prices */
+    20→export interface EngineTradeLine {
+    21→  id: string;
+    22→  kind: 'entry' | 'sl' | 'tp' | 'order';
+    23→  /** short label rendered in the left tag, e.g. "S/L" or "buy 0.10" */
+    24→  tag: string;
+    25→  price: number;
+    26→  color: string;
+    27→  /** draggable lines can be re-priced with pointer/touch */
+    28→  draggable: boolean;
+    29→}
+    30→
+    31→const PAD_RIGHT = 66; // price axis width
+    32→const PAD_BOTTOM = 23; // time axis height
+    33→const FONT = '11px Tahoma, "Segoe UI", sans-serif';
+    34→
+    35→function niceStep(raw: number): number {
+    36→  const exp = Math.floor(Math.log10(raw));
+    37→  const base = 10 ** exp;
+    38→  const frac = raw / base;
+    39→  let n: number;
+    40→  if (frac <= 1) n = 1;
+    41→  else if (frac <= 2) n = 2;
+    42→  else if (frac <= 2.5) n = 2.5;
+    43→  else if (frac <= 5) n = 5;
+    44→  else n = 10;
+    45→  return n * base;
+    46→}
+    47→
+    48→const TIME_STEPS = [
+    49→  60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600, 43200,
+    50→  86400, 172800, 345600, 604800, 1209600, 2592000, 7776000, 15552000, 31536000,
+    51→];
+    52→
+    53→export class ChartEngine {
+    54→  private canvas: HTMLCanvasElement;
+    55→  private ctx: CanvasRenderingContext2D;
+    56→  private dpr = 1;
+    57→  width = 800;
+    58→  height = 500;
+    59→
+    60→  candles: Candle[] = [];
+    61→  bid = 0;
+    62→  ask = 0;
+    63→
+    64→  scheme: ChartScheme;
+    65→  chartType: ChartType = 'candles';
+    66→  showGrid = true;
+    67→  showSeparators = true;
+    68→  tfSeconds = 900;
+    69→  digits = 5;
+    70→  indicators: EngineIndicator[] = [];
+    71→
+    72→  /** px per candle slot (body + gap) */
+    73→  barWidth = 9;
+    74→  /** bars hidden at the right edge (0 = latest bar visible) */
+    75→  rightOffset = 0;
+    76→  autoScroll = true;
+    77→  /** MT5 candle countdown timer on the price scale (mobile chart) */
+    78→  showCountdown = false;
+    79→  /** trade levels drawn over the plot (entries, S/L, T/P, pendings) */
+    80→  tradeLines: EngineTradeLine[] = [];
+    81→  /** called when a draggable line is released at a new price */
+    82→  onLineRelease: (id: string, price: number) => void = () => {};
+    83→
+    84→  private crosshair: { x: number; y: number } | null = null;
+    85→  private countdownTimer: ReturnType<typeof setInterval> | null = null;
+    86→  private drag: { startX: number; startOffset: number } | null = null;
+    87→  /** id of the trade line currently being dragged, if any */
+    88→  private dragLineId: string | null = null;
+    89→  /** last rendered price scale — used for pointer↔price mapping */
+    90→  private scale = { min: 0, max: 1 };
+    91→  private dirty = true;
+    92→  private rafId: number | null = null;
+    93→
+    94→  onHover: (candle: Candle | null) => void = () => {};
+    95→  onEdgeLeft: () => void = () => {};
+    96→  onViewChange: () => void = () => {};
+    97→
+    98→  constructor(canvas: HTMLCanvasElement, scheme: ChartScheme) {
+    99→    this.canvas = canvas;
+   100→    this.scheme = scheme;
+   101→    const ctx = canvas.getContext('2d');
+   102→    if (!ctx) throw new Error('2d context unavailable');
+   103→    this.ctx = ctx;
+   104→  }
+   105→
+   106→  // -------------------------------------------------------------- lifecycle
+   107→  resize(w: number, h: number): void {
+   108→    this.dpr = window.devicePixelRatio || 1;
+   109→    this.width = w;
+   110→    this.height = h;
+   111→    this.canvas.width = Math.floor(w * this.dpr);
+   112→    this.canvas.height = Math.floor(h * this.dpr);
+   113→    this.canvas.style.width = `${w}px`;
+   114→    this.canvas.style.height = `${h}px`;
+   115→    this.invalidate();
+   116→  }
+   117→
+   118→  invalidate(): void {
+   119→    this.dirty = true;
+   120→    if (this.rafId === null) {
+   121→      this.rafId = requestAnimationFrame(() => {
+   122→        this.rafId = null;
+   123→        if (this.dirty) {
+   124→          this.dirty = false;
+   125→          this.render();
+   126→        }
+   127→      });
+   128→    }
+   129→  }
+   130→
+   131→  /** enable/disable the candle-close countdown; a private 1s interval
+   132→   *  repaints the tag with zero React involvement (no re-render, no lag) */
+   133→  setCountdown(on: boolean): void {
+   134→    if (on === this.showCountdown) return;
+   135→    this.showCountdown = on;
+   136→    if (on) {
+   137→      this.countdownTimer = setInterval(() => {
+   138→        // skip repaints while the page is hidden (battery friendly)
+   139→        if (typeof document !== 'undefined' && document.hidden) return;
+   140→        this.invalidate();
+   141→      }, 1000);
+   142→      this.invalidate();
+   143→    } else if (this.countdownTimer !== null) {
+   144→      clearInterval(this.countdownTimer);
+   145→      this.countdownTimer = null;
+   146→      this.invalidate();
+   147→    }
+   148→  }
+   149→
+   150→  setData(candles: Candle[]): void {
+   151→    this.candles = candles;
+   152→    this.rightOffset = 0;
+   153→    this.autoScroll = true;
+   154→    this.invalidate();
+   155→  }
+   156→
+   157→  setQuote(bid: number, ask: number): void {
+   158→    this.bid = bid;
+   159→    this.ask = ask;
+   160→    if (this.candles.length > 0) {
+   161→      const last = this.candles[this.candles.length - 1];
+   162→      const bucket = Math.floor(Date.now() / 1000 / this.tfSeconds) * this.tfSeconds;
+   163→      if (bucket > last.time) {
+   164→        this.candles.push({ time: bucket, open: bid, high: bid, low: bid, close: bid, volume: 1 });
+   165→      } else {
+   166→        last.close = bid;
+   167→        if (bid > last.high) last.high = bid;
+   168→        if (bid < last.low) last.low = bid;
+   169→        last.volume += 1;
+   170→      }
+   171→    }
+   172→    this.invalidate();
+   173→  }
+   174→
+   175→  // ------------------------------------------------------------- interaction
+   176→  onWheel(deltaY: number): void {
+   177→    const factor = deltaY > 0 ? 1 / 1.18 : 1.18;
+   178→    const next = Math.min(48, Math.max(2.2, this.barWidth * factor));
+   179→    this.barWidth = next;
+   180→    if (this.autoScroll) this.rightOffset = 0;
+   181→    this.invalidate();
+   182→    this.onViewChange();
+   183→  }
+   184→
+   185→  /** pointer↔price helpers based on the last rendered scale */
+   186→  private yFor(price: number): number {
+   187→    const { min, max } = this.scale;
+   188→    const plotH = this.height - PAD_BOTTOM;
+   189→    const f = (price - min) / (max - min || 1);
+   190→    // mirrors render yOf — higher prices towards the top
+   191→    return Math.round((1 - f) * (plotH - 10) + 5);
+   192→  }
+   193→
+   194→  private priceAtY(y: number): number {
+   195→    const { min, max } = this.scale;
+   196→    const plotH = this.height - PAD_BOTTOM;
+   197→    return min + (1 - (y - 5) / (plotH - 10)) * (max - min);
+   198→  }
+   199→
+   200→  /** the draggable trade line under the pointer, if any */
+   201→  private hitLine(x: number, y: number): EngineTradeLine | null {
+   202→    const plotW = this.width - PAD_RIGHT;
+   203→    if (x > plotW) return null;
+   204→    for (const line of this.tradeLines) {
+   205→      if (!line.draggable) continue;
+   206→      if (Math.abs(y - this.yFor(line.price)) <= 6) return line;
+   207→    }
+   208→    return null;
+   209→  }
+   210→
+   211→  onMouseDown(x: number, y: number): void {
+   212→    // grabbing a trade line takes precedence over chart panning
+   213→    const hit = this.hitLine(x, y);
+   214→    if (hit) {
+   215→      this.dragLineId = hit.id;
+   216→      return;
+   217→    }
+   218→    this.drag = { startX: x, startOffset: this.rightOffset };
+   219→  }
+   220→
+   221→  onMouseMove(x: number, y: number, dragging: boolean): void {
+   222→    // live re-pricing of a grabbed trade line
+   223→    if (this.dragLineId) {
+   224→      const line = this.tradeLines.find((l) => l.id === this.dragLineId);
+   225→      if (line) {
+   226→        const plotH = this.height - PAD_BOTTOM;
+   227→        const yClamped = Math.min(Math.max(y, 5), plotH - 5);
+   228→        line.price = Math.max(this.priceAtY(yClamped), 0);
+   229→        this.canvas.style.cursor = 'ns-resize';
+   230→        this.invalidate();
+   231→      }
+   232→      return;
+   233→    }
+   234→    if (dragging && this.drag) {
+   235→      const dx = x - this.drag.startX;
+   236→      const slots = dx / this.barWidth;
+   237→      const plotW = this.width - PAD_RIGHT;
+   238→      const maxOffset = this.candles.length - Math.floor(plotW / this.barWidth) - 1;
+   239→      // MT5 grab behaviour: the chart follows the pointer — dragging right
+   240→      // pulls older bars into view (content moves right with the finger)
+   241→      const next = Math.round(this.drag.startOffset + slots);
+   242→      this.rightOffset = Math.min(Math.max(next, -3), maxOffset);
+   243→      if (this.rightOffset <= 0) {
+   244→        // reached the right edge → resume auto scroll
+   245→        this.autoScroll = true;
+   246→        this.rightOffset = Math.max(this.rightOffset, 0);
+   247→      } else {
+   248→        this.autoScroll = false;
+   249→      }
+   250→      this.invalidate();
+   251→      this.onViewChange();
+   252→      return;
+   253→    }
+   254→    const plotW = this.width - PAD_RIGHT;
+   255→    if (x < plotW && y < this.height - PAD_BOTTOM) {
+   256→      this.crosshair = { x, y };
+   257→    } else {
+   258→      this.crosshair = null;
+   259→    }
+   260→    // resize cursor over draggable trade lines
+   261→    this.canvas.style.cursor = this.hitLine(x, y) ? 'ns-resize' : '';
+   262→    // hover callback
+   263→    const idx = this.indexAtX(x);
+   264→    this.onHover(idx !== null && this.candles[idx] ? this.candles[idx] : null);
+   265→    this.invalidate();
+   266→  }
+   267→
+   268→  onMouseLeave(): void {
+   269→    this.crosshair = null;
+   270→    this.drag = null;
+   271→    // cancel any line drag without committing (line snaps back on re-sync)
+   272→    this.dragLineId = null;
+   273→    this.canvas.style.cursor = '';
+   274→    this.onHover(null);
+   275→    this.invalidate();
+   276→  }
+   277→
+   278→  onMouseUp(): void {
+   279→    if (this.dragLineId) {
+   280→      const line = this.tradeLines.find((l) => l.id === this.dragLineId);
+   281→      this.dragLineId = null;
+   282→      this.canvas.style.cursor = '';
+   283→      if (line) {
+   284→        const price = Number(line.price.toFixed(this.digits));
+   285→        this.onLineRelease(line.id, price);
+   286→      }
+   287→      return;
+   288→    }
+   289→    this.drag = null;
+   290→  }
+   291→
+   292→  scrollToEnd(): void {
+   293→    this.rightOffset = 0;
+   294→    this.autoScroll = true;
+   295→    this.invalidate();
+   296→  }
+   297→
+   298→  indexAtX(x: number): number | null {
+   299→    const slot = this.barWidth;
+   300→    const plotW = this.width - PAD_RIGHT;
+   301→    if (x < 0 || x > plotW) return null;
+   302→    const rightIdx = this.candles.length - 1 - this.rightOffset;
+   303→    // exact inverse of xOf()
+   304→    const idx = Math.round(rightIdx - (plotW - this.shiftPx() - slot / 2 - x) / slot);
+   305→    if (idx < 0 || idx >= this.candles.length) return null;
+   306→    return idx;
+   307→  }
+   308→
+   309→  /** MT5 "chart shift": empty margin at the right edge so the newest
+   310→   *  candle (incl. the live bar) renders fully clear of the price axis */
+   311→  private shiftPx(): number {
+   312→    const plotW = this.width - PAD_RIGHT;
+   313→    return Math.round(Math.min(Math.max(plotW * 0.07, 24), 110));
+   314→  }
+   315→
+   316→  // ------------------------------------------------------------------ math
+   317→  private visibleRange(): { left: number; right: number } {
+   318→    const plotW = this.width - PAD_RIGHT;
+   319→    const right = this.candles.length - 1 - this.rightOffset;
+   320→    const left = right - Math.ceil((plotW - this.shiftPx()) / this.barWidth) - 1;
+   321→    return { left, right };
+   322→  }
+   323→
+   324→  private indicatorSeries: (number | null)[][] = [];
+   325→
+   326→  private priceRange(left: number, right: number): { min: number; max: number } {
+   327→    let min = Infinity;
+   328→    let max = -Infinity;
+   329→    for (let i = Math.max(0, left); i <= Math.min(this.candles.length - 1, right); i += 1) {
+   330→      const c = this.candles[i];
+   331→      if (c.low < min) min = c.low;
+   332→      if (c.high > max) max = c.high;
+   333→    }
+   334→    if (this.bid > 0) {
+   335→      min = Math.min(min, this.bid);
+   336→      max = Math.max(max, this.bid);
+   337→    }
+   338→    for (const ind of this.indicatorSeries) {
+   339→      for (let i = Math.max(0, left); i <= Math.min(ind.length - 1, right); i += 1) {
+   340→        const v = ind[i];
+   341→        if (v === null) continue;
+   342→        if (v < min) min = v;
+   343→        if (v > max) max = v;
+   344→      }
+   345→    }
+   346→    if (!isFinite(min) || !isFinite(max)) return { min: 0, max: 1 };
+   347→    const pad = (max - min) * 0.08 || max * 0.002;
+   348→    return { min: min - pad, max: max + pad };
+   349→  }
+   350→
+   351→  private computeIndicators(): void {
+   352→    this.indicatorSeries = this.indicators.map((ind) => {
+   353→      const closes = this.candles.map((c) => c.close);
+   354→      const out: (number | null)[] = new Array(closes.length).fill(null);
+   355→      if (ind.method === 'sma') {
+   356→        let sum = 0;
+   357→        for (let i = 0; i < closes.length; i += 1) {
+   358→          sum += closes[i];
+   359→          if (i >= ind.period) sum -= closes[i - ind.period];
+   360→          if (i >= ind.period - 1) out[i] = sum / ind.period;
+   361→        }
+   362→      } else {
+   363→        const k = 2 / (ind.period + 1);
+   364→        let prev: number | null = null;
+   365→        for (let i = 0; i < closes.length; i += 1) {
+   366→          prev = prev === null ? closes[i] : closes[i] * k + prev * (1 - k);
+   367→          if (i >= ind.period - 1) out[i] = prev;
+   368→        }
+   369→      }
+   370→      return out;
+   371→    });
+   372→  }
+   373→
+   374→  // --------------------------------------------------------------- drawing
+   375→  render(): void {
+   376→    const ctx = this.ctx;
+   377→    const W = this.width;
+   378→    const H = this.height;
+   379→    const plotW = W - PAD_RIGHT;
+   380→    const plotH = H - PAD_BOTTOM;
+   381→
+   382→    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+   383→    ctx.font = FONT;
+   384→    ctx.imageSmoothingEnabled = false;
+   385→
+   386→    this.computeIndicators();
+   387→
+   388→    // background
+   389→    ctx.fillStyle = this.scheme.bg;
+   390→    ctx.fillRect(0, 0, W, H);
+   391→
+   392→    if (this.candles.length === 0) return;
+   393→
+   394→    const { left, right } = this.visibleRange();
+   395→    const { min, max } = this.priceRange(left, right);
+   396→    // remember the scale for pointer↔price mapping (trade line dragging)
+   397→    this.scale = { min, max };
+   398→    const slot = this.barWidth;
+   399→    const bodyW = Math.max(1, Math.floor(slot) - 2);
+   400→    const halfBody = Math.floor(bodyW / 2);
+   401→
+   402→    const yOf = (price: number) => {
+   403→      const f = (price - min) / (max - min);
+   404→      // MT5 orientation: higher prices are drawn towards the top
+   405→      return Math.round((1 - f) * (plotH - 10) + 5);
+   406→    };
+   407→    const xOf = (i: number) => {
+   408→      const rightIdx = this.candles.length - 1 - this.rightOffset;
+   409→      return Math.round(plotW - this.shiftPx() - (rightIdx - i) * slot - slot / 2);
+   410→    };
+   411→
+   412→    // ---- grid ------------------------------------------------------------
+   413→    if (this.showGrid) {
+   414→      ctx.strokeStyle = this.scheme.grid;
+   415→      ctx.lineWidth = 1;
+   416→
+   417→      const step = niceStep((max - min) / Math.max(2, Math.floor(plotH / 55)));
+   418→      ctx.beginPath();
+   419→      for (let p = Math.ceil(min / step) * step; p <= max; p += step) {
+   420→        const y = yOf(p) + 0.5;
+   421→        ctx.moveTo(0, y);
+   422→        ctx.lineTo(plotW, y);
+   423→      }
+   424→      ctx.stroke();
+   425→
+   426→      const tStep = this.timeStep();
+   427→      const leftT = this.candles[Math.max(0, left)]?.time ?? 0;
+   428→      const startT = Math.ceil(leftT / tStep) * tStep;
+   429→      ctx.beginPath();
+   430→      for (let t = startT; ; t += tStep) {
+   431→        let idx = this.candles.findIndex((c) => c.time >= t);
+   432→        if (idx < 0 || this.candles[idx].time >= t + tStep) break;
+   433→        if (idx < left) idx = left;
+   434→        const x = xOf(idx) + 0.5;
+   435→        if (x < 0 || x > plotW) continue;
+   436→        if (idx > right) break;
+   437→        ctx.moveTo(x, 0);
+   438→        ctx.lineTo(x, plotH);
+   439→      }
+   440→      ctx.stroke();
+   441→    }
+   442→
+   443→    // ---- period separators ------------------------------------------------
+   444→    if (this.showSeparators) {
+   445→      ctx.strokeStyle = this.scheme.separator;
+   446→      ctx.setLineDash([4, 4]);
+   447→      ctx.lineWidth = 1;
+   448→      ctx.beginPath();
+   449→      const sepUnit = this.tfSeconds >= 86400 ? 'month' : 'day';
+   450→      let prevUnit = -1;
+   451→      for (let i = Math.max(0, left); i <= Math.min(this.candles.length - 1, right); i += 1) {
+   452→        const d = new Date(this.candles[i].time * 1000);
+   453→        const unit = sepUnit === 'day' ? d.getUTCDate() : d.getUTCMonth();
+   454→        if (prevUnit !== -1 && unit !== prevUnit) {
+   455→          const x = xOf(i) + 0.5;
+   456→          if (x > 0 && x < plotW) {
+   457→            ctx.moveTo(x, 0);
+   458→            ctx.lineTo(x, plotH);
+   459→          }
+   460→        }
+   461→        prevUnit = unit;
+   462→      }
+   463→      ctx.stroke();
+   464→      ctx.setLineDash([]);
+   465→    }
+   466→
+   467→    // ---- price series ------------------------------------------------------
+   468→    const iStart = Math.max(0, left);
+   469→    const iEnd = Math.min(this.candles.length - 1, right);
+   470→
+   471→    if (this.chartType === 'candles') {
+   472→      for (let i = iStart; i <= iEnd; i += 1) {
+   473→        const c = this.candles[i];
+   474→        const x = xOf(i);
+   475→        if (x < -slot || x > plotW + slot) continue;
+   476→        const bull = c.close >= c.open;
+   477→        const yO = yOf(c.open);
+   478→        const yC = yOf(c.close);
+   479→        const yH = yOf(c.high);
+   480→        const yL = yOf(c.low);
+   481→        const top = Math.min(yO, yC);
+   482→        const h = Math.max(Math.abs(yC - yO), 1);
+   483→
+   484→        ctx.strokeStyle = bull ? this.scheme.bullBorder : this.scheme.bearBody;
+   485→        ctx.beginPath();
+   486→        ctx.moveTo(x + 0.5, yH);
+   487→        ctx.lineTo(x + 0.5, yL);
+   488→        ctx.stroke();
+   489→
+   490→        if (bull) {
+   491→          // hollow bullish candle — MT5 classic look
+   492→          ctx.fillStyle = this.scheme.bullFill;
+   493→          ctx.fillRect(x - halfBody, top, bodyW, h);
+   494→          ctx.strokeStyle = this.scheme.bullBorder;
+   495→          ctx.strokeRect(x - halfBody + 0.5, top + 0.5, bodyW - 1, Math.max(h - 1, 1));
+   496→        } else {
+   497→          ctx.fillStyle = this.scheme.bearBody;
+   498→          ctx.fillRect(x - halfBody, top, bodyW, h);
+   499→        }
+   500→      }
+   501→    } else if (this.chartType === 'bars') {
+   502→      for (let i = iStart; i <= iEnd; i += 1) {
+   503→        const c = this.candles[i];
+   504→        const x = xOf(i);
+   505→        if (x < -slot || x > plotW + slot) continue;
+   506→        const up = c.close >= c.open;
+   507→        ctx.strokeStyle = up ? this.scheme.barUp : this.scheme.barDown;
+   508→        const yO = yOf(c.open);
+   509→        const yC = yOf(c.close);
+   510→        const tick = Math.max(3, Math.floor(slot / 2) - 1);
+   511→        ctx.beginPath();
+   512→        ctx.moveTo(x + 0.5, yOf(c.high));
+   513→        ctx.lineTo(x + 0.5, yOf(c.low));
+   514→        ctx.moveTo(x - tick, yO + 0.5);
+   515→        ctx.lineTo(x + 0.5, yO + 0.5);
+   516→        ctx.moveTo(x + 0.5, yC + 0.5);
+   517→        ctx.lineTo(x + tick, yC + 0.5);
+   518→        ctx.stroke();
+   519→      }
+   520→    } else {
+   521→      ctx.strokeStyle = this.scheme.line;
+   522→      ctx.lineWidth = 1;
+   523→      ctx.beginPath();
+   524→      let started = false;
+   525→      for (let i = iStart; i <= iEnd; i += 1) {
+   526→        const x = xOf(i);
+   527→        const y = yOf(this.candles[i].close);
+   528→        if (!started) {
+   529→          ctx.moveTo(x, y);
+   530→          started = true;
+   531→        } else ctx.lineTo(x, y);
+   532→      }
+   533→      ctx.stroke();
+   534→      ctx.lineWidth = 1;
+   535→    }
+   536→
+   537→    // ---- indicators ---------------------------------------------------------
+   538→    this.indicatorSeries.forEach((series, si) => {
+   539→      const ind = this.indicators[si];
+   540→      if (!ind) return;
+   541→      ctx.strokeStyle = ind.color;
+   542→      ctx.lineWidth = 1;
+   543→      ctx.beginPath();
+   544→      let started = false;
+   545→      for (let i = iStart; i <= iEnd; i += 1) {
+   546→        const v = series[i];
+   547→        if (v === null) {
+   548→          started = false;
+   549→          continue;
+   550→        }
+   551→        const x = xOf(i);
+   552→        const y = yOf(v);
+   553→        if (!started) {
+   554→          ctx.moveTo(x, y);
+   555→          started = true;
+   556→        } else ctx.lineTo(x, y);
+   557→      }
+   558→      ctx.stroke();
+   559→    });
+   560→
+   561→    // ---- bid line + tag ------------------------------------------------------
+   562→    if (this.bid > 0 && this.bid >= min && this.bid <= max) {
+   563→      const y = yOf(this.bid) + 0.5;
+   564→      ctx.strokeStyle = this.scheme.bidLine;
+   565→      ctx.setLineDash([5, 3]);
+   566→      ctx.beginPath();
+   567→      ctx.moveTo(0, y);
+   568→      ctx.lineTo(plotW, y);
+   569→      ctx.stroke();
+   570→      ctx.setLineDash([]);
+   571→
+   572→      ctx.fillStyle = this.scheme.bidLine;
+   573→      ctx.fillRect(plotW + 1, y - 9, PAD_RIGHT - 2, 18);
+   574→      ctx.fillStyle = '#FFFFFF';
+   575→      ctx.textAlign = 'center';
+   576→      ctx.fillText(this.bid.toFixed(this.digits), plotW + PAD_RIGHT / 2, y + 4);
+   577→    }
+   578→
+   579→    // ---- trade levels (MT5 style: dashed line + left label tag) -------------
+   580→    // position entries, S/L, T/P and pending-order prices; draggable
+   581→    // lines show an axis tag while being re-priced
+   582→    for (const tl of this.tradeLines) {
+   583→      if (tl.price < min || tl.price > max) continue;
+   584→      const y = this.yFor(tl.price) + 0.5;
+   585→      ctx.strokeStyle = tl.color;
+   586→      ctx.setLineDash([6, 4]);
+   587→      ctx.lineWidth = 1;
+   588→      ctx.beginPath();
+   589→      ctx.moveTo(0, y);
+   590→      ctx.lineTo(plotW, y);
+   591→      ctx.stroke();
+   592→      ctx.setLineDash([]);
+   593→
+   594→      const text = `${tl.tag} ${tl.price.toFixed(this.digits)}`;
+   595→      ctx.fillStyle = tl.color;
+   596→      const w = Math.max(58, text.length * 6 + 10);
+   597→      ctx.fillRect(2, y - 8, w, 16);
+   598→      ctx.fillStyle = '#FFFFFF';
+   599→      ctx.textAlign = 'left';
+   600→      ctx.fillText(text, 6, y + 4);
+   601→
+   602→      // dragged line — mirror the live price on the price axis
+   603→      if (tl.id === this.dragLineId) {
+   604→        ctx.fillStyle = tl.color;
+   605→        ctx.fillRect(plotW + 1, y - 9, PAD_RIGHT - 2, 18);
+   606→        ctx.fillStyle = '#FFFFFF';
+   607→        ctx.textAlign = 'center';
+   608→        ctx.fillText(tl.price.toFixed(this.digits), plotW + PAD_RIGHT / 2, y + 4);
+   609→      }
+   610→    }
+   611→
+   612→    // ---- price axis ----------------------------------------------------------
+   613→    const pStep = niceStep((max - min) / Math.max(2, Math.floor(plotH / 55)));
+   614→    for (let p = Math.ceil(min / pStep) * pStep; p <= max; p += pStep) {
+   615→      const y = yOf(p);
+   616→      ctx.fillStyle = this.scheme.bg;
+   617→      ctx.fillRect(plotW + 1, y - 8, PAD_RIGHT - 2, 16);
+   618→      ctx.fillStyle = this.scheme.axisText;
+   619→      ctx.textAlign = 'left';
+   620→      ctx.fillText(p.toFixed(this.digits), plotW + 6, y + 4);
+   621→    }
+   622→    ctx.strokeStyle = this.scheme.grid;
+   623→    ctx.beginPath();
+   624→    ctx.moveTo(plotW + 0.5, 0);
+   625→    ctx.lineTo(plotW + 0.5, plotH);
+   626→    ctx.moveTo(0, plotH + 0.5);
+   627→    ctx.lineTo(plotW, plotH + 0.5);
+   628→    ctx.stroke();
+   629→
+   630→    // ---- candle countdown (MT5 price-scale timer) ----------------------------
+   631→    // small tag right under the bid tag counting down to the bar close;
+   632→    // drawn after the price axis so axis labels never overpaint it
+   633→    if (this.showCountdown && this.bid > 0 && this.bid >= min && this.bid <= max) {
+   634→      const last = this.candles[this.candles.length - 1];
+   635→      const rem = Math.max(0, last.time + this.tfSeconds - Date.now() / 1000);
+   636→      const hh = Math.floor(rem / 3600);
+   637→      const mm = Math.floor((rem % 3600) / 60);
+   638→      const ss = Math.floor(rem % 60);
+   639→      const pad2 = (n: number) => String(n).padStart(2, '0');
+   640→      const label = hh > 0 ? `${hh}:${pad2(mm)}:${pad2(ss)}` : `${pad2(mm)}:${pad2(ss)}`;
+   641→
+   642→      const by = yOf(this.bid);
+   643→      // bid tag spans by-9 .. by+9 → place the countdown directly below,
+   644→      // or flip above when it would run off the bottom edge
+   645→      let ty = by + 10;
+   646→      if (ty + 16 > plotH) ty = by - 26;
+   647→      ctx.fillStyle = '#5A5A5A';
+   648→      ctx.fillRect(plotW + 1, ty, PAD_RIGHT - 2, 16);
+   649→      ctx.fillStyle = '#FFFFFF';
+   650→      ctx.textAlign = 'center';
+   651→      ctx.fillText(label, plotW + PAD_RIGHT / 2, ty + 12);
+   652→    }
+   653→
+   654→    // ---- time axis ------------------------------------------------------------
+   655→    const tStep = this.timeStep();
+   656→    const leftT = this.candles[Math.max(0, left)]?.time ?? 0;
+   657→    const startT = Math.ceil(leftT / tStep) * tStep;
+   658→    ctx.textAlign = 'center';
+   659→    const dayBoundary = 86400;
+   660→    for (let t = startT; ; t += tStep) {
+   661→      const idx = this.candles.findIndex((c) => c.time >= t);
+   662→      if (idx < 0) break;
+   663→      if (this.candles[idx].time >= t + tStep) break;
+   664→      if (idx > iEnd) break;
+   665→      const x = xOf(idx);
+   666→      if (x > 0 && x < plotW) {
+   667→        const isMidnight = this.candles[idx].time % dayBoundary === 0;
+   668→        let label: string;
+   669→        if (tStep >= 2592000) {
+   670→          label = fmtDayLabelYear(this.candles[idx].time);
+   671→        } else if (isMidnight) {
+   672→          label = fmtDayLabel(this.candles[idx].time);
+   673→        } else {
+   674→          label = fmtClock(this.candles[idx].time);
+   675→        }
+   676→        ctx.fillStyle = this.scheme.axisText;
+   677→        ctx.fillText(label, x, plotH + 16);
+   678→      }
+   679→    }
+   680→
+   681→    // ---- crosshair -------------------------------------------------------------
+   682→    if (this.crosshair) {
+   683→      const { x, y } = this.crosshair;
+   684→      if (x < plotW && y < plotH) {
+   685→        ctx.strokeStyle = this.scheme.crosshair;
+   686→        ctx.setLineDash([2, 3]);
+   687→        ctx.beginPath();
+   688→        ctx.moveTo(x + 0.5, 0);
+   689→        ctx.lineTo(x + 0.5, plotH);
+   690→        ctx.moveTo(0, y + 0.5);
+   691→        ctx.lineTo(plotW, y + 0.5);
+   692→        ctx.stroke();
+   693→        ctx.setLineDash([]);
+   694→
+   695→        const price = min + (1 - (y - 5) / (plotH - 10)) * (max - min);
+   696→        ctx.fillStyle = '#5A5A5A';
+   697→        ctx.fillRect(plotW + 1, y - 9, PAD_RIGHT - 2, 18);
+   698→        ctx.fillStyle = '#FFFFFF';
+   699→        ctx.textAlign = 'center';
+   700→        ctx.fillText(price.toFixed(this.digits), plotW + PAD_RIGHT / 2, y + 4);
+   701→
+   702→        const idx = this.indexAtX(x);
+   703→        if (idx !== null && this.candles[idx]) {
+   704→          const d = new Date(this.candles[idx].time * 1000);
+   705→          const pad = (n: number) => String(n).padStart(2, '0');
+   706→          const label =
+   707→            this.tfSeconds >= 86400
+   708→              ? `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`
+   709→              : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+   710→          ctx.fillStyle = '#5A5A5A';
+   711→          const w = Math.max(54, label.length * 7 + 10);
+   712→          ctx.fillRect(x - w / 2, plotH + 1, w, PAD_BOTTOM - 2);
+   713→          ctx.fillStyle = '#FFFFFF';
+   714→          ctx.fillText(label, x, plotH + 16);
+   715→        }
+   716→      }
+   717→    }
+   718→  }
+   719→
+   720→  private timeStep(): number {
+   721→    const targetPx = 80;
+   722→    const slots = targetPx / this.barWidth;
+   723→    const targetSec = slots * this.tfSeconds;
+   724→    for (const s of TIME_STEPS) {
+   725→      if (s >= targetSec) return s;
+   726→    }
+   727→    return 31536000;
+   728→  }
+   729→}
+   730→
