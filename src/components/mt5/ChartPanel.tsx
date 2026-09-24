@@ -10,7 +10,7 @@ import { useTrading } from '@/stores/trading';
 import { getSymbol, tfByLabel } from '@/lib/symbols';
 import { fmtPrice } from '@/lib/format';
 import type { Candle } from '@/lib/tv/candles';
-import { ChartEngine, type EngineIndicator } from './chart/engine';
+import { ChartEngine, type EngineIndicator, type EngineTradeLine } from './chart/engine';
 import { SCHEMES } from '@/stores/app';
 import { IconCross } from './icons';
 
@@ -99,19 +99,107 @@ export function ChartPanel() {
     engine.setQuote(quote.bid, quote.ask);
   }, [quote?.bid]);
 
-  // ---- pending order lines for the active symbol ------------------------------
+  // ---- trade levels (entries, S/L, T/P, pendings) for the active symbol ------
+  const syncLines = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const lines: EngineTradeLine[] = [];
+    for (const p of trading.positions) {
+      if (p.symbol !== symbol) continue;
+      lines.push({
+        id: `entry-${p.ticket}`, kind: 'entry', tag: `${p.type} ${p.volume.toFixed(2)}`,
+        price: p.openPrice, color: p.type === 'buy' ? '#3391ff' : '#eb4d5c', draggable: false,
+      });
+      if (p.sl > 0) {
+        lines.push({ id: `sl-${p.ticket}`, kind: 'sl', tag: 'S/L', price: p.sl, color: '#ef5350', draggable: true });
+      }
+      if (p.tp > 0) {
+        lines.push({ id: `tp-${p.ticket}`, kind: 'tp', tag: 'T/P', price: p.tp, color: '#26a69a', draggable: true });
+      }
+    }
+    for (const o of trading.pendings) {
+      if (o.symbol !== symbol) continue;
+      lines.push({
+        id: `ord-${o.ticket}`, kind: 'order', tag: `${o.type} ${o.volume.toFixed(2)}`,
+        price: o.price, color: o.type.startsWith('buy') ? '#00c853' : '#ff5252', draggable: true,
+      });
+      if (o.sl > 0) {
+        lines.push({ id: `slp-${o.ticket}`, kind: 'sl', tag: 'S/L', price: o.sl, color: '#ef5350', draggable: true });
+      }
+      if (o.tp > 0) {
+        lines.push({ id: `tpp-${o.ticket}`, kind: 'tp', tag: 'T/P', price: o.tp, color: '#26a69a', draggable: true });
+      }
+    }
+    engine.tradeLines = lines;
+    engine.invalidate();
+  }, [trading.positions, trading.pendings, symbol]);
+
+  useEffect(() => {
+    syncLines();
+  }, [syncLines]);
+
+  // ---- drag-release: commit the new price of a trade line ---------------------
+  const handleLineRelease = useCallback(
+    (id: string, price: number) => {
+      const liveQuotes = useQuotes.getState().quotes;
+      const q = liveQuotes[symbol];
+      const digits = info.digits;
+      const reject = (msg: string) => trading.log(msg, 'error');
+
+      if (id.startsWith('sl-') || id.startsWith('tp-')) {
+        const pos = useTrading.getState().positions.find((p) => p.ticket === parseInt(id.slice(3), 10));
+        if (!pos) return;
+        if (id.startsWith('sl-')) {
+          const ok = pos.type === 'buy' ? q && price < q.bid : q !== undefined && price > q.ask;
+          if (!ok) {
+            reject(`invalid S/L ${fmtPrice(price, digits)} for #${pos.ticket} — must be ${pos.type === 'buy' ? 'below Bid' : 'above Ask'}`);
+          } else {
+            trading.modifyPosition(pos.ticket, price, pos.tp);
+          }
+        } else {
+          const ok = pos.type === 'buy' ? q && price > q.ask : q !== undefined && price < q.bid;
+          if (!ok) {
+            reject(`invalid T/P ${fmtPrice(price, digits)} for #${pos.ticket} — must be ${pos.type === 'buy' ? 'above Ask' : 'below Bid'}`);
+          } else {
+            trading.modifyPosition(pos.ticket, pos.sl, price);
+          }
+        }
+      } else if (id.startsWith('slp-') || id.startsWith('tpp-')) {
+        const order = useTrading.getState().pendings.find((o) => o.ticket === parseInt(id.slice(4), 10));
+        if (!order) return;
+        if (id.startsWith('slp-')) {
+          const ok = order.type.startsWith('buy') ? price < order.price : price > order.price;
+          if (!ok) reject(`invalid S/L ${fmtPrice(price, digits)} for order #${order.ticket}`);
+          else trading.modifyPending(order.ticket, { sl: price });
+        } else {
+          const ok = order.type.startsWith('buy') ? price > order.price : price < order.price;
+          if (!ok) reject(`invalid T/P ${fmtPrice(price, digits)} for order #${order.ticket}`);
+          else trading.modifyPending(order.ticket, { tp: price });
+        }
+      } else if (id.startsWith('ord-')) {
+        const order = useTrading.getState().pendings.find((o) => o.ticket === parseInt(id.slice(4), 10));
+        if (!order) return;
+        let ok = true;
+        if (q) {
+          if (order.type === 'buy limit') ok = price < q.ask;
+          else if (order.type === 'buy stop') ok = price > q.ask;
+          else if (order.type === 'sell limit') ok = price > q.bid;
+          else if (order.type === 'sell stop') ok = price < q.bid;
+        }
+        if (!ok) reject(`invalid ${order.type} price ${fmtPrice(price, digits)} for order #${order.ticket}`);
+        else trading.modifyPending(order.ticket, { price });
+      }
+      // re-sync from the store — reverts the visual if the release was rejected
+      syncLines();
+    },
+    [symbol, info.digits, trading, syncLines],
+  );
+
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
-    engine.orderLines = trading.pendings
-      .filter((o) => o.symbol === symbol)
-      .map((o) => ({
-        price: o.price,
-        label: `${o.type} ${o.volume.toFixed(2)}`,
-        color: o.type.startsWith('buy') ? '#00c853' : '#ff5252',
-      }));
-    engine.invalidate();
-  }, [trading.pendings, symbol]);
+    engine.onLineRelease = handleLineRelease;
+  }, [handleLineRelease]);
 
   // ---- one-click trading ------------------------------------------------------
   const oneClickTrade = (type: 'buy' | 'sell') => {
@@ -141,9 +229,9 @@ export function ChartPanel() {
 
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    const { x } = toLocal(e);
+    const { x, y } = toLocal(e);
     dragRef.current.dragging = true;
-    engineRef.current?.onMouseDown(x);
+    engineRef.current?.onMouseDown(x, y);
   };
 
   const onMouseMove = (e: React.MouseEvent) => {
@@ -174,14 +262,15 @@ export function ChartPanel() {
       const { x, y } = touchPos(e.touches[0]);
       touchRef.current = { pinch: false, dist: 0 };
       dragRef.current.dragging = true;
-      engineRef.current?.onMouseDown(x);
+      engineRef.current?.onMouseDown(x, y);
       engineRef.current?.onMouseMove(x, y, true);
     } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       touchRef.current = { pinch: true, dist: Math.hypot(dx, dy) };
       dragRef.current.dragging = false;
-      engineRef.current?.onMouseUp();
+      // cancels an in-progress line drag without committing
+      engineRef.current?.onMouseLeave();
     }
   };
 
@@ -213,7 +302,7 @@ export function ChartPanel() {
       touchRef.current.pinch = false;
       const { x, y } = touchPos(e.touches[0]);
       dragRef.current.dragging = true;
-      engineRef.current?.onMouseDown(x);
+      engineRef.current?.onMouseDown(x, y);
       engineRef.current?.onMouseMove(x, y, true);
     }
   };

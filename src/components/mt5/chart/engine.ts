@@ -15,6 +15,19 @@ export interface EngineIndicator {
   color: string;
 }
 
+/** horizontal trade level drawn over the plot (MT5 trade lines):
+ *  position entries, S/L, T/P and pending-order prices */
+export interface EngineTradeLine {
+  id: string;
+  kind: 'entry' | 'sl' | 'tp' | 'order';
+  /** short label rendered in the left tag, e.g. "S/L" or "buy 0.10" */
+  tag: string;
+  price: number;
+  color: string;
+  /** draggable lines can be re-priced with pointer/touch */
+  draggable: boolean;
+}
+
 const PAD_RIGHT = 66; // price axis width
 const PAD_BOTTOM = 23; // time axis height
 const FONT = '11px Tahoma, "Segoe UI", sans-serif';
@@ -61,11 +74,17 @@ export class ChartEngine {
   /** bars hidden at the right edge (0 = latest bar visible) */
   rightOffset = 0;
   autoScroll = true;
-  /** pending-order horizontal price lines drawn over the plot */
-  orderLines: { price: number; label: string; color: string }[] = [];
+  /** trade levels drawn over the plot (entries, S/L, T/P, pendings) */
+  tradeLines: EngineTradeLine[] = [];
+  /** called when a draggable line is released at a new price */
+  onLineRelease: (id: string, price: number) => void = () => {};
 
   private crosshair: { x: number; y: number } | null = null;
   private drag: { startX: number; startOffset: number } | null = null;
+  /** id of the trade line currently being dragged, if any */
+  private dragLineId: string | null = null;
+  /** last rendered price scale — used for pointer↔price mapping */
+  private scale = { min: 0, max: 1 };
   private dirty = true;
   private rafId: number | null = null;
 
@@ -141,11 +160,55 @@ export class ChartEngine {
     this.onViewChange();
   }
 
-  onMouseDown(x: number): void {
+  /** pointer↔price helpers based on the last rendered scale */
+  private yFor(price: number): number {
+    const { min, max } = this.scale;
+    const plotH = this.height - PAD_BOTTOM;
+    const f = (price - min) / (max - min || 1);
+    // mirrors render yOf — higher prices towards the top
+    return Math.round((1 - f) * (plotH - 10) + 5);
+  }
+
+  private priceAtY(y: number): number {
+    const { min, max } = this.scale;
+    const plotH = this.height - PAD_BOTTOM;
+    return min + (1 - (y - 5) / (plotH - 10)) * (max - min);
+  }
+
+  /** the draggable trade line under the pointer, if any */
+  private hitLine(x: number, y: number): EngineTradeLine | null {
+    const plotW = this.width - PAD_RIGHT;
+    if (x > plotW) return null;
+    for (const line of this.tradeLines) {
+      if (!line.draggable) continue;
+      if (Math.abs(y - this.yFor(line.price)) <= 6) return line;
+    }
+    return null;
+  }
+
+  onMouseDown(x: number, y: number): void {
+    // grabbing a trade line takes precedence over chart panning
+    const hit = this.hitLine(x, y);
+    if (hit) {
+      this.dragLineId = hit.id;
+      return;
+    }
     this.drag = { startX: x, startOffset: this.rightOffset };
   }
 
   onMouseMove(x: number, y: number, dragging: boolean): void {
+    // live re-pricing of a grabbed trade line
+    if (this.dragLineId) {
+      const line = this.tradeLines.find((l) => l.id === this.dragLineId);
+      if (line) {
+        const plotH = this.height - PAD_BOTTOM;
+        const yClamped = Math.min(Math.max(y, 5), plotH - 5);
+        line.price = Math.max(this.priceAtY(yClamped), 0);
+        this.canvas.style.cursor = 'ns-resize';
+        this.invalidate();
+      }
+      return;
+    }
     if (dragging && this.drag) {
       const dx = x - this.drag.startX;
       const slots = dx / this.barWidth;
@@ -172,6 +235,8 @@ export class ChartEngine {
     } else {
       this.crosshair = null;
     }
+    // resize cursor over draggable trade lines
+    this.canvas.style.cursor = this.hitLine(x, y) ? 'ns-resize' : '';
     // hover callback
     const idx = this.indexAtX(x);
     this.onHover(idx !== null && this.candles[idx] ? this.candles[idx] : null);
@@ -181,11 +246,24 @@ export class ChartEngine {
   onMouseLeave(): void {
     this.crosshair = null;
     this.drag = null;
+    // cancel any line drag without committing (line snaps back on re-sync)
+    this.dragLineId = null;
+    this.canvas.style.cursor = '';
     this.onHover(null);
     this.invalidate();
   }
 
   onMouseUp(): void {
+    if (this.dragLineId) {
+      const line = this.tradeLines.find((l) => l.id === this.dragLineId);
+      this.dragLineId = null;
+      this.canvas.style.cursor = '';
+      if (line) {
+        const price = Number(line.price.toFixed(this.digits));
+        this.onLineRelease(line.id, price);
+      }
+      return;
+    }
     this.drag = null;
   }
 
@@ -293,13 +371,16 @@ export class ChartEngine {
 
     const { left, right } = this.visibleRange();
     const { min, max } = this.priceRange(left, right);
+    // remember the scale for pointer↔price mapping (trade line dragging)
+    this.scale = { min, max };
     const slot = this.barWidth;
     const bodyW = Math.max(1, Math.floor(slot) - 2);
     const halfBody = Math.floor(bodyW / 2);
 
     const yOf = (price: number) => {
       const f = (price - min) / (max - min);
-      return Math.round(f * (plotH - 10) + 5);
+      // MT5 orientation: higher prices are drawn towards the top
+      return Math.round((1 - f) * (plotH - 10) + 5);
     };
     const xOf = (i: number) => {
       const rightIdx = this.candles.length - 1 - this.rightOffset;
@@ -473,11 +554,13 @@ export class ChartEngine {
       ctx.fillText(this.bid.toFixed(this.digits), plotW + PAD_RIGHT / 2, y + 4);
     }
 
-    // ---- pending order lines (MT5 style: dashed line + left label tag) -------
-    for (const ol of this.orderLines) {
-      if (ol.price < min || ol.price > max) continue;
-      const y = yOf(ol.price) + 0.5;
-      ctx.strokeStyle = ol.color;
+    // ---- trade levels (MT5 style: dashed line + left label tag) -------------
+    // position entries, S/L, T/P and pending-order prices; draggable
+    // lines show an axis tag while being re-priced
+    for (const tl of this.tradeLines) {
+      if (tl.price < min || tl.price > max) continue;
+      const y = this.yFor(tl.price) + 0.5;
+      ctx.strokeStyle = tl.color;
       ctx.setLineDash([6, 4]);
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -486,12 +569,22 @@ export class ChartEngine {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      ctx.fillStyle = ol.color;
-      const w = Math.max(58, ol.label.length * 6 + 10);
+      const text = `${tl.tag} ${tl.price.toFixed(this.digits)}`;
+      ctx.fillStyle = tl.color;
+      const w = Math.max(58, text.length * 6 + 10);
       ctx.fillRect(2, y - 8, w, 16);
       ctx.fillStyle = '#FFFFFF';
       ctx.textAlign = 'left';
-      ctx.fillText(ol.label, 6, y + 4);
+      ctx.fillText(text, 6, y + 4);
+
+      // dragged line — mirror the live price on the price axis
+      if (tl.id === this.dragLineId) {
+        ctx.fillStyle = tl.color;
+        ctx.fillRect(plotW + 1, y - 9, PAD_RIGHT - 2, 18);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.textAlign = 'center';
+        ctx.fillText(tl.price.toFixed(this.digits), plotW + PAD_RIGHT / 2, y + 4);
+      }
     }
 
     // ---- price axis ----------------------------------------------------------

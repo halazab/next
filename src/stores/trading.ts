@@ -4,6 +4,8 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { getSymbol } from '@/lib/symbols';
+import { profitAt } from '@/lib/calc';
 
 export interface Position {
   ticket: number;
@@ -14,6 +16,8 @@ export interface Position {
   openTime: number;
   sl: number;
   tp: number;
+  /** trailing-stop distance in points (0/undefined = disabled) */
+  ts?: number;
   commission: number;
   swap: number;
 }
@@ -73,9 +77,16 @@ interface TradingState {
   modifyPosition: (ticket: number, sl: number, tp: number) => void;
   placePending: (p: Omit<PendingOrder, 'ticket' | 'openTime'>) => number;
   cancelPending: (ticket: number) => void;
+  /** modify an existing pending order (price / S/L / T/P) */
+  modifyPending: (ticket: number, patch: { price?: number; sl?: number; tp?: number }) => void;
+  /** enable / disable a trailing stop on a position (distance in points) */
+  setTrailing: (ticket: number, points: number) => void;
   /** called on every quote batch — fills pending orders whose
    *  activation condition is met, at the order price (MT5 behaviour) */
   checkPendings: (quotes: Record<string, ActivationQuote>) => void;
+  /** called on every quote batch — executes S/L & T/P levels and
+   *  maintains trailing stops, exactly like the MT5 trade server */
+  checkStops: (quotes: Record<string, ActivationQuote>) => void;
   log: (text: string, level?: JournalEntry['level']) => void;
   resetAccount: () => void;
 }
@@ -197,6 +208,101 @@ export const useTrading = create<TradingState>()(
             },
           ],
         }));
+      },
+
+      modifyPending: (ticket, patch) => {
+        const order = get().pendings.find((o) => o.ticket === ticket);
+        if (!order) return;
+        const price = patch.price ?? order.price;
+        set((st) => ({
+          pendings: st.pendings.map((o) => (o.ticket === ticket ? { ...o, ...patch } : o)),
+          journal: [
+            ...st.journal,
+            {
+              time: Date.now(),
+              text: `order #${ticket} modified: ${order.type} ${order.volume.toFixed(2)} ${order.symbol} at ${price}`,
+              level: 'trade' as const,
+            },
+          ],
+        }));
+      },
+
+      setTrailing: (ticket, points) => {
+        const pos = get().positions.find((p) => p.ticket === ticket);
+        if (!pos) return;
+        set((st) => ({
+          positions: st.positions.map((p) => (p.ticket === ticket ? { ...p, ts: points } : p)),
+        }));
+        get().log(
+          points > 0
+            ? `trailing stop ${points} points set on #${ticket} ${pos.symbol}`
+            : `trailing stop disabled on #${ticket} ${pos.symbol}`,
+        );
+      },
+
+      checkStops: (quotes) => {
+        const st = get();
+        if (st.positions.length === 0) return;
+
+        // 1) S/L & T/P execution — closes at the stop price (MT5 server)
+        for (const p of st.positions) {
+          const q = quotes[p.symbol];
+          if (!q) continue;
+          if (p.type === 'buy') {
+            if (p.sl > 0 && q.bid <= p.sl) {
+              get().closePosition(p.ticket, p.sl, profitAt(p, p.sl, quotes));
+              get().log(`stop loss hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.sl}`, 'trade');
+              continue;
+            }
+            if (p.tp > 0 && q.bid >= p.tp) {
+              get().closePosition(p.ticket, p.tp, profitAt(p, p.tp, quotes));
+              get().log(`take profit hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.tp}`, 'trade');
+              continue;
+            }
+          } else {
+            if (p.sl > 0 && q.ask >= p.sl) {
+              get().closePosition(p.ticket, p.sl, profitAt(p, p.sl, quotes));
+              get().log(`stop loss hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.sl}`, 'trade');
+              continue;
+            }
+            if (p.tp > 0 && q.ask <= p.tp) {
+              get().closePosition(p.ticket, p.tp, profitAt(p, p.tp, quotes));
+              get().log(`take profit hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.tp}`, 'trade');
+              continue;
+            }
+          }
+        }
+
+        // 2) trailing-stop maintenance — S/L follows the price by `ts`
+        //    points once the position is in profit by that distance;
+        //    it never moves against the position
+        for (const p of get().positions) {
+          if (!p.ts || p.ts <= 0) continue;
+          const q = quotes[p.symbol];
+          if (!q) continue;
+          const info = getSymbol(p.symbol);
+          const point = 10 ** -info.digits;
+          const dist = p.ts * point;
+          if (p.type === 'buy') {
+            if (q.bid - p.openPrice >= dist) {
+              const newSl = Number((q.bid - dist).toFixed(info.digits));
+              if (p.sl === 0 || newSl > p.sl + point / 2) {
+                set((cur) => ({
+                  positions: cur.positions.map((x) => (x.ticket === p.ticket ? { ...x, sl: newSl } : x)),
+                }));
+              }
+            }
+          } else {
+            if (p.openPrice - q.ask >= dist) {
+              const newSl = Number((q.ask + dist).toFixed(info.digits));
+              if (p.sl === 0 || newSl < p.sl - point / 2) {
+                set((cur) => ({
+                  positions: cur.positions.map((x) => (x.ticket === p.ticket ? { ...x, sl: newSl } : x)),
+                }));
+              }
+            }
+          }
+        }
       },
 
       checkPendings: (quotes) => {

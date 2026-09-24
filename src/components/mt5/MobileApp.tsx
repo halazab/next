@@ -478,7 +478,7 @@ function TradeScreen() {
           <div key={o.ticket} className="mb-pos mb-pending">
             <div className="mb-pos-row1">
               <span className="mb-pos-sym">{o.symbol}</span>
-              <button className="mb-pend-cancel" onClick={() => trading.cancelPending(o.ticket)}>Cancel</button>
+              <span className="mb-pos-dim">#{o.ticket}</span>
             </div>
             <div className="mb-pos-row2">
               <span className={o.type.startsWith('buy') ? 'mw-up' : 'mw-down'}>{o.type}</span>
@@ -491,6 +491,14 @@ function TradeScreen() {
                 </span>
               </div>
             )}
+            <div className="mb-pos-actions">
+              <button className="mb-act-btn" onClick={() => app.openDialog('modifyOrder', String(o.ticket))}>
+                Modify
+              </button>
+              <button className="mb-act-btn mb-act-danger" onClick={() => trading.cancelPending(o.ticket)}>
+                Cancel
+              </button>
+            </div>
           </div>
         );
       })}
@@ -510,13 +518,6 @@ function TradeScreen() {
               <span className={p.type === 'buy' ? 'mw-up' : 'mw-down'}>{p.type}</span>
               <span className="mb-pos-dim">{fmtVolume(p.volume)} @ {fmtPrice(p.openPrice, inf.digits)}</span>
               <span className="mb-pos-dim">→ {fmtPrice(cur, inf.digits)}</span>
-              <button
-                className="mb-pos-close"
-                title={`Close #${p.ticket}`}
-                onClick={() => closePosition(p.ticket)}
-              >
-                ✕
-              </button>
             </div>
             {(p.sl || p.tp) && (
               <div className="mb-pos-row2">
@@ -525,6 +526,32 @@ function TradeScreen() {
                 </span>
               </div>
             )}
+            <div className="mb-pos-actions">
+              <button
+                className="mb-act-btn"
+                onClick={() => app.openDialog('modifySltp', String(p.ticket))}
+              >
+                S/L · T/P
+              </button>
+              <button
+                className={`mb-act-btn ${p.ts ? 'mb-act-on' : ''}`}
+                title="Trailing stop — distance in points"
+                onClick={() => {
+                  const next = !p.ts ? 50 : p.ts === 50 ? 100 : p.ts === 100 ? 200 : p.ts === 200 ? 400 : 0;
+                  trading.setTrailing(p.ticket, next);
+                }}
+              >
+                TS {p.ts || 'Off'}
+              </button>
+              <span className="mb-act-flex" />
+              <button
+                className="mb-pos-close"
+                title={`Close #${p.ticket}`}
+                onClick={() => closePosition(p.ticket)}
+              >
+                ✕
+              </button>
+            </div>
           </div>
         );
       })}

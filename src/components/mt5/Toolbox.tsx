@@ -73,11 +73,23 @@ function TradeTab() {
 
   const posMenu = (e: React.MouseEvent, ticket: number) => {
     e.preventDefault();
+    const pos = trading.positions.find((p) => p.ticket === ticket);
+    const ts = pos?.ts ?? 0;
     app.openContextMenu(e.clientX, e.clientY, [
       { label: 'New Order', shortcut: 'F9', onClick: () => app.openDialog('newOrder') },
       { separator: true, label: '' },
       { label: 'Close Position', onClick: () => closePosition(ticket) },
       { label: 'Modify SL / TP', onClick: () => app.openDialog('modifySltp', String(ticket)) },
+      {
+        label: 'Trailing Stop',
+        submenu: [
+          { label: 'None', checked: ts === 0, onClick: () => trading.setTrailing(ticket, 0) },
+          { label: '50 Points', checked: ts === 50, onClick: () => trading.setTrailing(ticket, 50) },
+          { label: '100 Points', checked: ts === 100, onClick: () => trading.setTrailing(ticket, 100) },
+          { label: '200 Points', checked: ts === 200, onClick: () => trading.setTrailing(ticket, 200) },
+          { label: '400 Points', checked: ts === 400, onClick: () => trading.setTrailing(ticket, 400) },
+        ],
+      },
       { separator: true, label: '' },
       { label: 'Close All Positions', onClick: () => trading.positions.forEach((p) => closePosition(p.ticket)) },
     ]);
@@ -88,6 +100,7 @@ function TradeTab() {
     app.openContextMenu(e.clientX, e.clientY, [
       { label: 'New Order', shortcut: 'F9', onClick: () => app.openDialog('newOrder') },
       { separator: true, label: '' },
+      { label: 'Modify Order...', onClick: () => app.openDialog('modifyOrder', String(ticket)) },
       { label: 'Cancel Order', onClick: () => trading.cancelPending(ticket) },
     ]);
   };
@@ -138,7 +151,7 @@ function TradeTab() {
                   </td>
                   <td className="tb-cell">{fmtVolume(p.volume)}</td>
                   <td className="tb-cell">{fmtPrice(p.openPrice, info.digits)}</td>
-                  <td className="tb-cell tb-dim">{p.sl ? fmtPrice(p.sl, info.digits) : ''}</td>
+                  <td className="tb-cell tb-dim">{p.sl ? `${fmtPrice(p.sl, info.digits)}${p.ts ? ' ·TS' : ''}` : ''}</td>
                   <td className="tb-cell tb-dim">{p.tp ? fmtPrice(p.tp, info.digits) : ''}</td>
                   <td className="tb-cell">{fmtPrice(cur, info.digits)}</td>
                   <td className="tb-cell">{p.swap.toFixed(2)}</td>
@@ -154,7 +167,13 @@ function TradeTab() {
             {trading.pendings.map((o) => {
               const info = getSymbol(o.symbol);
               return (
-                <tr key={o.ticket} className="tb-row tb-pending" onContextMenu={(e) => pendMenu(e, o.ticket)}>
+                <tr
+                  key={o.ticket}
+                  className="tb-row tb-pending"
+                  onContextMenu={(e) => pendMenu(e, o.ticket)}
+                  onDoubleClick={() => app.openDialog('modifyOrder', String(o.ticket))}
+                  title="Double-click to modify the order"
+                >
                   <td className="tb-cell tb-symbol-cell">{o.symbol}</td>
                   <td className="tb-cell">{o.ticket}</td>
                   <td className="tb-cell">{fmtDateTime(o.openTime)}</td>

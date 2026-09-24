@@ -1694,4 +1694,44 @@ select.mt-input { height: 26px; }
   padding: 8px 16px;
 }
 
+/* ---- mobile position / pending card action rows ---- */
+.mb-pos-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.mb-act-btn {
+  font-family: var(--mt-font);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 6px 11px;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  background: #242424;
+  color: #d0d0d0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mb-act-btn:active { background: #2e2e2e; }
+
+.mb-act-on {
+  border-color: #2e7d32;
+  background: rgba(46, 125, 50, 0.16);
+  color: #7bd97f;
+}
+
+.mb-act-danger {
+  border-color: #8b3a3a;
+  background: rgba(176, 72, 63, 0.12);
+  color: #ff8a80;
+}
+
+.mb-act-danger:active { background: #b0483f; color: #fff; }
+
+.mb-act-flex { flex: 1; }
+
 .no-place-btn:hover { background: linear-gradient(#55688a, #45577a); }

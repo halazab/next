@@ -130,8 +130,11 @@ export const useQuotes = create<QuotesState>((set, get) => ({
         }
       }
       set({ quotes, tickBuffers: { ...buffers }, status: msg.status, lastTickAt: Date.now() });
-      // pending-order activation runs on every snapshot (MT5 server behaviour)
-      useTrading.getState().checkPendings(quotes);
+      // SL/TP execution + trailing-stop maintenance + pending-order
+      // activation run on every snapshot (MT5 trade-server behaviour)
+      const tradingApi = useTrading.getState();
+      tradingApi.checkStops(quotes);
+      tradingApi.checkPendings(quotes);
     });
 
     es.addEventListener('quotes', (ev) => {
@@ -166,6 +169,7 @@ export const useQuotes = create<QuotesState>((set, get) => ({
         }
         return { quotes, tickBuffers: buffers, lastTickAt: Date.now() };
       });
+      useTrading.getState().checkStops(get().quotes);
       useTrading.getState().checkPendings(get().quotes);
     });
 

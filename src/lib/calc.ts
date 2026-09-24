@@ -23,18 +23,28 @@ export interface QuoteLike {
   ask: number;
 }
 
-/** floating profit in account currency (USD) for a position */
+/** floating profit in account currency (USD) for a position, marked to market */
 export function positionProfit(
   pos: Position,
   quotes: Record<string, QuoteLike>,
 ): number {
-  const info = getSymbol(pos.symbol);
   const q = quotes[pos.symbol];
   if (!q) return 0;
-  const dir = pos.type === 'buy' ? 1 : -1;
   // MT5 marks a position to market using the closing-side price:
   // buy closes by Bid, sell closes by Ask
   const closePrice = pos.type === 'buy' ? q.bid : q.ask;
+  return profitAt(pos, closePrice, quotes);
+}
+
+/** profit in account currency (USD) for a position closed at a fixed price
+ *  (used for S/L, T/P and trailing-stop executions) */
+export function profitAt(
+  pos: Position,
+  closePrice: number,
+  quotes: Record<string, QuoteLike>,
+): number {
+  const info = getSymbol(pos.symbol);
+  const dir = pos.type === 'buy' ? 1 : -1;
   const diff = (closePrice - pos.openPrice) * dir;
 
   let profitInQuote = diff * info.contractSize * pos.volume;

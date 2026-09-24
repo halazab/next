@@ -62,3 +62,24 @@ Work Log:
 Stage Summary:
 - MT5 clone now has pending orders (limit/stop with live activation) and One-Click Trading on both desktop and mobile, plus two mobile chart fixes (natural grab panning, MT5 chart shift so the newest candles are always fully visible)
 - Artifacts touched: chart/engine.ts, ChartPanel.tsx, Toolbar.tsx, Toolbox.tsx, MobileApp.tsx, dialogs/Dialogs.tsx, stores/trading.ts, stores/quotes.ts, stores/app.ts, globals.css
+
+---
+Task ID: 4
+Agent: main (Super Z)
+Task: Trailing stop + modify pending order price + draggable SL/TP lines on the chart
+
+Work Log:
+- Fixed a pre-existing chart bug exposed while building the drag feature: render yOf mapped higher prices towards the BOTTOM (whole chart vertically inverted vs MT5 since Task 1; crosshair already assumed the correct orientation). Flipped render yOf + engine yFor so higher prices draw towards the top — chart now matches MT5 exactly (verified axis labels decrease downward, downtrends render as downtrends)
+- Engine: replaced static orderLines with draggable tradeLines (EngineTradeLine: entry/S-L/T-P/order kinds, tag, price, color, draggable). Pointer↔price mapping via last-rendered scale (yFor/priceAtY are exact inverses), ±6px hit test, ns-resize cursor over draggable lines, live re-pricing while dragging with a colored axis tag mirroring the dragged price, commit on release (rounded to digits), cancel without commit on leave/pinch-start
+- ChartPanel: syncLines() builds trade lines for the active symbol (position entry lines non-draggable + S/L red / T/P green draggable; pending order line + its S/L/T/P draggable); handleLineRelease validates the released price against live Bid/Ask (buy S/L below Bid, T/P above Ask; sell inverted; pending limit/stop rules vs market; pending S/L/T/P vs order price) and commits via modifyPosition/modifyPending or journals an error and snaps the line back; mouse+touch both pass (x,y) into engine.onMouseDown
+- Trading store: Position.ts (trailing distance in points, persisted); setTrailing(); modifyPending(price/sl/tp); checkStops() runs on every quote batch — executes S/L & T/P at the stop price (buy: Bid<=S/L, Bid>=T/P; sell: Ask>=S/L, Ask<=T/P) and maintains trailing stops (activates once in profit by the distance, S/L = Bid−dist / Ask+dist, never moves against the position); calc.ts gained profitAt(pos, fixedPrice) for stop fills
+- New Order dialog: ModifyPendingDialog (price/S-L/T-P with full MT5 validation vs market and order price, Cancel Order shortcut) registered as 'modifyOrder'
+- Desktop Toolbox: position context menu gained an authentic MT5 "Trailing Stop" submenu (None/50/100/200/400 points with checks); pending rows gained "Modify Order..." + double-click to modify; S/L cell shows "·TS" marker when trailing is active
+- Mobile Trade screen: position cards gained an action row — S/L · T/P (modify dialog), TS button cycling Off→50→100→200→400 with green active state, ✕ close; pending cards gained Modify + Cancel buttons; new mb-pos-actions/mb-act-btn CSS (additive)
+- Environment: cleared stale Turbopack .next cache again after CSS edits stopped being served
+- Browser-verified end-to-end: entry/S-L/T-P/order lines render per active symbol; invalid TP drag rejected with journal error ("invalid T/P ... must be above Ask"); valid TP drag committed (1.14055→1.13957, ~1 pip/px mapping); pending order line drag re-priced the order (1.13950→1.13928 mouse, →1.13968 touch drag); Modify Order dialog via double-click and via mobile Modify button; S/L execution auto-closed a BTCUSD position at 84200 (deal -16.00, journal "stop loss hit"); trailing stop verified fully: SL set to exactly Bid−50pt, trailed up 1.13673→1.13674→1.13687, price reversed, SL hit → position auto-closed at 1.13691 for +19.10; mobile TS button cycles + stores ts; test trades cleaned up (0 positions / 0 pendings)
+- ESLint clean, no console/page errors after clean rebuild; desktop 1440×900 and mobile 390×844 re-verified
+
+Stage Summary:
+- MT5 clone now ships trailing stops (with real SL/TP execution on ticks), pending-order price modification (drag on chart + dialog), and MT5-style draggable S/L, T/P and order lines with live axis tags — plus the chart orientation is now truly MT5-correct
+- Artifacts touched: chart/engine.ts, ChartPanel.tsx, Toolbox.tsx, MobileApp.tsx, dialogs/Dialogs.tsx, stores/{trading,quotes,app}.ts, lib/calc.ts, globals.css

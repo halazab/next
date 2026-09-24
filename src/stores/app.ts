@@ -130,6 +130,7 @@ type DialogKind =
   | 'symbols'
   | 'about'
   | 'modifySltp'
+  | 'modifyOrder'
   | null;
 
 interface AppState {

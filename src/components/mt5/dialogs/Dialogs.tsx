@@ -394,6 +394,74 @@ export function ModifySltpDialog({ ticket }: { ticket: number }) {
   );
 }
 
+// ---------------------------------------------------------------- Modify pending order
+export function ModifyPendingDialog({ ticket }: { ticket: number }) {
+  const app = useApp();
+  const quotes = useQuotes((s) => s.quotes);
+  const trading = useTrading();
+  const order = trading.pendings.find((o) => o.ticket === ticket);
+  const [price, setPrice] = useState(order ? String(order.price) : '');
+  const [sl, setSl] = useState(order?.sl ? String(order.sl) : '');
+  const [tp, setTp] = useState(order?.tp ? String(order.tp) : '');
+  const [error, setError] = useState('');
+
+  if (!order) return null;
+  const info = getSymbol(order.symbol);
+  const q = quotes[order.symbol];
+
+  const save = () => {
+    setError('');
+    const pPrice = parseFloat(price);
+    const slV = parseFloat(sl);
+    const tpV = parseFloat(tp);
+    if (!isFinite(pPrice) || pPrice <= 0) return setError('Enter a valid order price');
+    if (q) {
+      if (order.type === 'buy limit' && pPrice >= q.ask) return setError('Buy Limit price must be below Ask');
+      if (order.type === 'buy stop' && pPrice <= q.ask) return setError('Buy Stop price must be above Ask');
+      if (order.type === 'sell limit' && pPrice <= q.bid) return setError('Sell Limit price must be above Bid');
+      if (order.type === 'sell stop' && pPrice >= q.bid) return setError('Sell Stop price must be below Bid');
+    }
+    if (slV) {
+      if (order.type.startsWith('buy') && slV >= pPrice) return setError('For BUY orders S/L must be below the order price');
+      if (order.type.startsWith('sell') && slV <= pPrice) return setError('For SELL orders S/L must be above the order price');
+    }
+    if (tpV) {
+      if (order.type.startsWith('buy') && tpV <= pPrice) return setError('For BUY orders T/P must be above the order price');
+      if (order.type.startsWith('sell') && tpV >= pPrice) return setError('For SELL orders T/P must be below the order price');
+    }
+    trading.modifyPending(ticket, { price: pPrice, sl: slV || 0, tp: tpV || 0 });
+    app.closeDialog();
+  };
+
+  return (
+    <DialogShell title={`Modify Order #${ticket} — ${order.symbol}`} onClose={() => app.closeDialog()} width={380}>
+      <div className="no-grid">
+        <label>Type</label>
+        <div className={`mt-input mt-input-static ${order.type.startsWith('buy') ? 'mw-up' : 'mw-down'}`}>
+          {order.type} {order.volume.toFixed(2)}
+        </div>
+        <label>Order Price</label>
+        <input
+          className="mt-input"
+          value={price}
+          placeholder={q ? fmtPrice(order.type.startsWith('buy') ? q.ask : q.bid, info.digits) : ''}
+          onChange={(e) => setPrice(e.target.value)}
+        />
+        <label>Stop Loss</label>
+        <input className="mt-input" value={sl} placeholder="—" onChange={(e) => setSl(e.target.value)} />
+        <label>Take Profit</label>
+        <input className="mt-input" value={tp} placeholder="—" onChange={(e) => setTp(e.target.value)} />
+      </div>
+      {error && <div className="no-error">{error}</div>}
+      <div className="mt-dialog-buttons">
+        <button className="mt-btn" onClick={save}>Modify</button>
+        <button className="mt-btn" onClick={() => { trading.cancelPending(order.ticket); app.closeDialog(); }}>Cancel Order</button>
+        <button className="mt-btn" onClick={() => app.closeDialog()}>Close</button>
+      </div>
+    </DialogShell>
+  );
+}
+
 // ---------------------------------------------------------------- About
 export function AboutDialog() {
   const app = useApp();
@@ -445,6 +513,8 @@ export function Dialogs() {
       return <SymbolsDialog />;
     case 'modifySltp':
       return <ModifySltpDialog ticket={parseInt(payload ?? '0', 10)} />;
+    case 'modifyOrder':
+      return <ModifyPendingDialog ticket={parseInt(payload ?? '0', 10)} />;
     case 'about':
       return <AboutDialog />;
     default:
