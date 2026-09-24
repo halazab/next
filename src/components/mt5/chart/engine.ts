@@ -245,10 +245,12 @@ export class ChartEngine {
   }
 
   onMouseMove(x: number, y: number, dragging: boolean): void {
-    // time-axis drag → horizontal zoom (bar width), TV-style exponential feel
+    // time-axis drag → horizontal zoom (bar width), TV-style exponential
+    // feel: drag left spreads candles apart (zoom in), drag right compresses
+    // them (zoom out) — anchored at the live edge
     if (dragging && this.dragAxis === 'time') {
       const dx = x - this.axisStart;
-      const next = this.axisStartBar * Math.pow(2, dx / 120); // ~120px = 2x
+      const next = this.axisStartBar * Math.pow(2, -dx / 120); // ~120px = 2x
       this.barWidth = Math.min(48, Math.max(2.2, next));
       if (this.autoScroll) this.rightOffset = 0;
       this.canvas.style.cursor = 'ew-resize';
@@ -282,18 +284,16 @@ export class ChartEngine {
       const dx = x - this.drag.startX;
       const slots = dx / this.barWidth;
       const plotW = this.width - PAD_RIGHT;
-      const maxOffset = this.candles.length - Math.floor(plotW / this.barWidth) - 1;
-      // MT5 grab behaviour: the chart follows the pointer — dragging right
-      // pulls older bars into view (content moves right with the finger)
+      const maxOffset = Math.max(0, this.candles.length - Math.floor(plotW / this.barWidth) - 1);
+      // TradingView grab behaviour: the chart follows the pointer freely in
+      // both directions — right pulls older bars into view, left pushes the
+      // newest candle towards the left edge (empty future space appears)
+      const minOffset = -Math.max(0, Math.floor((plotW - this.shiftPx() - this.barWidth / 2 - 40) / this.barWidth));
       const next = Math.round(this.drag.startOffset + slots);
-      this.rightOffset = Math.min(Math.max(next, -3), maxOffset);
-      if (this.rightOffset <= 0) {
-        // reached the right edge → resume auto scroll
-        this.autoScroll = true;
-        this.rightOffset = Math.max(this.rightOffset, 0);
-      } else {
-        this.autoScroll = false;
-      }
+      this.rightOffset = Math.min(Math.max(next, minOffset), maxOffset);
+      // pinned to the live edge only when the newest candle sits at its
+      // default position — scrolled either way resumes/stops it naturally
+      this.autoScroll = this.rightOffset === 0;
       this.invalidate();
       this.onViewChange();
       return;

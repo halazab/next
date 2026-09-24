@@ -154,3 +154,17 @@ Work Log:
 
 Stage Summary:
 - TV-style axis scaling works on desktop mouse + mobile touch, desktop pixels unchanged elsewhere
+
+---
+Task ID: tv-pan-flip
+Agent: Main Agent
+Task: TradingView-style free chart panning (both directions) + flip time-axis zoom direction
+
+Work Log:
+- engine.ts pan drag: removed the -3 bar clamp + snap-back-to-0 bug; added minOffset so the newest candle can be pushed to near the left edge (empty future space), maxOffset clamped >= 0, autoScroll now true only when rightOffset === 0
+- engine.ts time-axis drag: flipped direction to TV style (drag left = candles spread/zoom in, drag right = compress/zoom out)
+- Verified desktop 1440x900: mid-chart drag left 300px → last candle mid-screen with empty right area; +200px more keeps moving; drag right returns to live edge; time-axis left widens candles, right compresses
+- tsc/eslint clean, no console errors
+
+Stage Summary:
+- Chart panning now free in both directions like TradingView; horizontal axis zoom direction matches TV
