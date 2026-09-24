@@ -7,6 +7,7 @@ import { useEffect, useRef } from 'react';
 import { useApp } from '@/stores/app';
 import { useQuotes } from '@/stores/quotes';
 import { useTrading, seedJournal } from '@/stores/trading';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { MenuBar } from './MenuBar';
 import { Toolbar } from './Toolbar';
 import { MarketWatch } from './MarketWatch';
@@ -16,10 +17,12 @@ import { Toolbox } from './Toolbox';
 import { StatusBar } from './StatusBar';
 import { GlobalContextMenu } from './ContextMenu';
 import { Dialogs } from './dialogs/Dialogs';
+import { MobileApp } from './MobileApp';
 
 export function MT5App() {
   const app = useApp();
   const connect = useQuotes((s) => s.connect);
+  const isMobile = useIsMobile();
 
   // boot: connect SSE + seed journal once (external system sync, no UI state)
   useEffect(() => {
@@ -80,6 +83,9 @@ export function MT5App() {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   };
+
+  // phones get the MT5-mobile shell; desktop keeps the exact terminal layout
+  if (isMobile) return <MobileApp />;
 
   return (
     <div className="mt5-root" onContextMenu={(e) => e.preventDefault()}>

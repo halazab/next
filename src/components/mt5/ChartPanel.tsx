@@ -138,6 +138,63 @@ export function ChartPanel() {
     engineRef.current?.onWheel(e.deltaY);
   };
 
+  // ---- touch events (mobile) — 1 finger pans, 2 fingers pinch-zoom --------
+  const touchRef = useRef<{ pinch: boolean; dist: number }>({ pinch: false, dist: 0 });
+
+  const touchPos = (t: React.Touch) => {
+    const rect = canvasRef.current!.getBoundingClientRect();
+    return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+  };
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      const { x, y } = touchPos(e.touches[0]);
+      touchRef.current = { pinch: false, dist: 0 };
+      dragRef.current.dragging = true;
+      engineRef.current?.onMouseDown(x);
+      engineRef.current?.onMouseMove(x, y, true);
+    } else if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      touchRef.current = { pinch: true, dist: Math.hypot(dx, dy) };
+      dragRef.current.dragging = false;
+      engineRef.current?.onMouseUp();
+    }
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    // canvas has touch-action:none, so the browser never hijacks the gesture
+    if (e.touches.length === 1 && !touchRef.current.pinch) {
+      const { x, y } = touchPos(e.touches[0]);
+      engineRef.current?.onMouseMove(x, y, true);
+    } else if (e.touches.length === 2 && touchRef.current.pinch) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      const delta = touchRef.current.dist - dist; // fingers apart → zoom in
+      if (Math.abs(delta) >= 2) {
+        engineRef.current?.onWheel(delta * 1.2);
+        touchRef.current.dist = dist;
+      }
+    }
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length === 0) {
+      dragRef.current.dragging = false;
+      touchRef.current.pinch = false;
+      engineRef.current?.onMouseUp();
+      engineRef.current?.onMouseLeave();
+    } else if (e.touches.length === 1) {
+      // pinch ended — restart a fresh pan anchor from the remaining finger
+      touchRef.current.pinch = false;
+      const { x, y } = touchPos(e.touches[0]);
+      dragRef.current.dragging = true;
+      engineRef.current?.onMouseDown(x);
+      engineRef.current?.onMouseMove(x, y, true);
+    }
+  };
+
   // ---- context menu -----------------------------------------------------------------
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -190,6 +247,9 @@ export function ChartPanel() {
             engineRef.current?.onMouseLeave();
           }}
           onWheel={onWheel}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
           onContextMenu={onContextMenu}
         />
 
