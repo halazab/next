@@ -40,3 +40,25 @@ Stage Summary:
 - Mobile now ships a native-feeling MT5 mobile app UX; desktop terminal layout bit-for-bit unchanged
 - Artifacts: src/components/mt5/MobileApp.tsx (new), MT5App.tsx (+3 lines), ChartPanel.tsx (touch handlers), globals.css (additive mb-* block)
 - Screenshots: scripts/mt5-mobile2-*.png (quotes/chart/trade/sheet/order/position/details/history/menu), scripts/mt5-desktop-check.png
+
+---
+Task ID: 3
+Agent: main (Super Z)
+Task: Fix mobile chart pan direction + hidden newest candles; add pending orders and One-Click Trading
+
+Work Log:
+- Engine bug 1 (inverted pan): onMouseMove computed next = startOffset - slots, so dragging right moved content left (opposite of MT5 grab). Flipped to startOffset + slots — content now follows pointer on desktop and touch
+- Engine bug 2 (newest candles hidden): shiftBars() subtracted 4 from rightIdx used by xOf/visibleRange, so the 4 newest candles (incl. the live bar) were drawn past the plot edge and clipped. Replaced with a pixel-based MT5 chart shift: shiftPx() = clamp(plotW*0.07, 24, 110); xOf/indexAtX/visibleRange rewritten around it so the live candle renders fully, clear of the price axis
+- Pending orders: trading store gained PendingOrder type (buy/sell limit/stop), placePending/cancelPending/checkPendings (activation rules: buy limit ask<=price, buy stop ask>=price, sell limit bid>=price, sell stop bid<=price; fills at order price); quotes store calls checkPendings on every snapshot/quote batch; pendings persisted + ticket-seq restore
+- New Order dialog: Type select (Instant/Buy Limit/Sell Limit/Buy Stop/Sell Stop), Order Price field with MT5 validation (limit below/above, stop beyond, SL/TP vs order price), single "Place" button + pending footnote
+- Chart: engine.orderLines draws dashed horizontal lines with colored label tags (buy green/sell red) for the active symbol's pendings
+- Desktop Toolbox Trade tab renders pending rows (type colored, order price, ✕ cancel, context menu Cancel Order)
+- One-Click Trading: app store oneClick + toolbar toggle; desktop chart overlay panel (SELL bid | volume stepper ±0.01 | BUY ask | ✕) executing instantly; mobile quote sheet SELL/BUY now one-click 0.10 market orders (jumps to Trade tab after fill) with "New Order…" for the full dialog
+- Mobile Trade screen: Pending Orders section with Cancel buttons
+- Environment: Turbopack dev cache went stale (CSS edits not served) — cleared .next and restarted dev server
+- Browser-verified: pan direction (drag right pulls older bars), live candle fully visible with shift gap, sell-limit line rendered on chart, pending validation errors, buy limit auto-activated on tick (positions 1→2, pendings 4→3, filled at order price), one-click BUY on desktop (instant position) and mobile sheet (instant position + Trade tab jump), Toolbox pending rows, test trades cleaned up afterwards
+- ESLint clean across components/stores
+
+Stage Summary:
+- MT5 clone now has pending orders (limit/stop with live activation) and One-Click Trading on both desktop and mobile, plus two mobile chart fixes (natural grab panning, MT5 chart shift so the newest candles are always fully visible)
+- Artifacts touched: chart/engine.ts, ChartPanel.tsx, Toolbar.tsx, Toolbox.tsx, MobileApp.tsx, dialogs/Dialogs.tsx, stores/trading.ts, stores/quotes.ts, stores/app.ts, globals.css

@@ -61,6 +61,8 @@ export class ChartEngine {
   /** bars hidden at the right edge (0 = latest bar visible) */
   rightOffset = 0;
   autoScroll = true;
+  /** pending-order horizontal price lines drawn over the plot */
+  orderLines: { price: number; label: string; color: string }[] = [];
 
   private crosshair: { x: number; y: number } | null = null;
   private drag: { startX: number; startOffset: number } | null = null;
@@ -149,7 +151,9 @@ export class ChartEngine {
       const slots = dx / this.barWidth;
       const plotW = this.width - PAD_RIGHT;
       const maxOffset = this.candles.length - Math.floor(plotW / this.barWidth) - 1;
-      const next = Math.round(this.drag.startOffset - slots);
+      // MT5 grab behaviour: the chart follows the pointer — dragging right
+      // pulls older bars into view (content moves right with the finger)
+      const next = Math.round(this.drag.startOffset + slots);
       this.rightOffset = Math.min(Math.max(next, -3), maxOffset);
       if (this.rightOffset <= 0) {
         // reached the right edge → resume auto scroll
@@ -194,24 +198,26 @@ export class ChartEngine {
   indexAtX(x: number): number | null {
     const slot = this.barWidth;
     const plotW = this.width - PAD_RIGHT;
-    const rightIdx = this.candles.length - 1 - this.rightOffset - this.shiftBars();
-    const leftIdx = rightIdx - Math.ceil(plotW / slot);
     if (x < 0 || x > plotW) return null;
-    const idx = Math.round(leftIdx + x / slot - 0.5);
+    const rightIdx = this.candles.length - 1 - this.rightOffset;
+    // exact inverse of xOf()
+    const idx = Math.round(rightIdx - (plotW - this.shiftPx() - slot / 2 - x) / slot);
     if (idx < 0 || idx >= this.candles.length) return null;
     return idx;
   }
 
-  private shiftBars(): number {
-    // MT5 "chart shift": a small margin of empty space at the right edge
-    return 4;
+  /** MT5 "chart shift": empty margin at the right edge so the newest
+   *  candle (incl. the live bar) renders fully clear of the price axis */
+  private shiftPx(): number {
+    const plotW = this.width - PAD_RIGHT;
+    return Math.round(Math.min(Math.max(plotW * 0.07, 24), 110));
   }
 
   // ------------------------------------------------------------------ math
   private visibleRange(): { left: number; right: number } {
     const plotW = this.width - PAD_RIGHT;
-    const right = this.candles.length - 1 - this.rightOffset - this.shiftBars();
-    const left = right - Math.ceil(plotW / this.barWidth);
+    const right = this.candles.length - 1 - this.rightOffset;
+    const left = right - Math.ceil((plotW - this.shiftPx()) / this.barWidth) - 1;
     return { left, right };
   }
 
@@ -296,8 +302,8 @@ export class ChartEngine {
       return Math.round(f * (plotH - 10) + 5);
     };
     const xOf = (i: number) => {
-      const rightIdx = this.candles.length - 1 - this.rightOffset - this.shiftBars();
-      return Math.round(plotW - (rightIdx - i) * slot - slot / 2);
+      const rightIdx = this.candles.length - 1 - this.rightOffset;
+      return Math.round(plotW - this.shiftPx() - (rightIdx - i) * slot - slot / 2);
     };
 
     // ---- grid ------------------------------------------------------------
@@ -465,6 +471,27 @@ export class ChartEngine {
       ctx.fillStyle = '#FFFFFF';
       ctx.textAlign = 'center';
       ctx.fillText(this.bid.toFixed(this.digits), plotW + PAD_RIGHT / 2, y + 4);
+    }
+
+    // ---- pending order lines (MT5 style: dashed line + left label tag) -------
+    for (const ol of this.orderLines) {
+      if (ol.price < min || ol.price > max) continue;
+      const y = yOf(ol.price) + 0.5;
+      ctx.strokeStyle = ol.color;
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(plotW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = ol.color;
+      const w = Math.max(58, ol.label.length * 6 + 10);
+      ctx.fillRect(2, y - 8, w, 16);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'left';
+      ctx.fillText(ol.label, 6, y + 4);
     }
 
     // ---- price axis ----------------------------------------------------------

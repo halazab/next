@@ -151,6 +151,8 @@ interface AppState {
   toolboxHeight: number;
   mobilePanel: 'chart' | 'watch' | 'toolbox';
   mwTab: 'symbols' | 'ticks' | 'details' | 'trade';
+  /** MT5 one-click trading overlay on the chart */
+  oneClick: boolean;
 
   dialog: DialogKind;
   dialogPayload: string | null;
@@ -174,6 +176,7 @@ interface AppState {
   setToolboxHeight: (h: number) => void;
   setMobilePanel: (p: 'chart' | 'watch' | 'toolbox') => void;
   setMwTab: (t: 'symbols' | 'ticks' | 'details' | 'trade') => void;
+  toggleOneClick: () => void;
   openDialog: (d: DialogKind, payload?: string) => void;
   closeDialog: () => void;
   openContextMenu: (x: number, y: number, items: MenuItemDef[]) => void;
@@ -211,6 +214,7 @@ export const useApp = create<AppState>()(
       toolboxHeight: 236,
       mobilePanel: 'chart',
       mwTab: 'symbols',
+      oneClick: false,
 
       dialog: null,
       dialogPayload: null,
@@ -233,6 +237,7 @@ export const useApp = create<AppState>()(
       setToolboxHeight: (h) => set({ toolboxHeight: Math.min(Math.max(h, 100), window.innerHeight - 300) }),
       setMobilePanel: (p) => set({ mobilePanel: p }),
       setMwTab: (t) => set({ mwTab: t }),
+      toggleOneClick: () => set((st) => ({ oneClick: !st.oneClick })),
       openDialog: (d, payload) => set({ dialog: d, dialogPayload: payload ?? null }),
       closeDialog: () => set({ dialog: null, dialogPayload: null }),
       openContextMenu: (x, y, items) => set({ contextMenu: { open: true, x, y, items } }),

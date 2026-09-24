@@ -229,6 +229,7 @@ export function MobileApp() {
           onClose={() => setSheetSymbol(null)}
           onChart={() => { app.setSymbol(sheetSymbol); setTab('chart'); setSheetSymbol(null); }}
           onDetails={() => { setDetailsSymbol(sheetSymbol); setSheetSymbol(null); }}
+          onTraded={() => setTab('trade')}
         />
       )}
 
@@ -326,16 +327,31 @@ function QuoteSheet({
   onClose,
   onChart,
   onDetails,
+  onTraded,
 }: {
   symbol: string;
   onClose: () => void;
   onChart: () => void;
   onDetails: () => void;
+  onTraded: () => void;
 }) {
   const app = useApp();
   const q = useQuotes((s) => s.quotes[symbol]);
   const hideSymbol = useQuotes((s) => s.hideSymbol);
+  const trading = useTrading();
   const info = getSymbol(symbol);
+
+  // one-click execution at the default volume — like the MT5 mobile app.
+  // Returns to the Trade tab so the result is immediately visible.
+  const instantTrade = (type: 'buy' | 'sell') => {
+    if (!q) return;
+    const price = type === 'buy' ? q.ask : q.bid;
+    const ticket = trading.openPosition({ symbol, type, volume: 0.1, openPrice: price, sl: 0, tp: 0 });
+    trading.log(`one-click #${ticket}: ${type} 0.10 ${symbol} at ${fmtPrice(price, info.digits)}`);
+    onClose();
+    onTraded();
+    app.setSymbol(symbol);
+  };
 
   return (
     <div className="mb-sheet-overlay" onClick={onClose}>
@@ -358,23 +374,27 @@ function QuoteSheet({
         <div className="mb-sheet-btns">
           <button
             className="mt-btn-sell"
-            onClick={() => { onClose(); app.openDialog('newOrder', symbol); }}
+            disabled={!q}
+            onClick={() => instantTrade('sell')}
           >
             <span>SELL</span>
             <span className="no-price">{q ? fmtPrice(q.bid, info.digits) : '—'}</span>
           </button>
           <button
             className="mt-btn-buy"
-            onClick={() => { onClose(); app.openDialog('newOrder', symbol); }}
+            disabled={!q}
+            onClick={() => instantTrade('buy')}
           >
             <span>BUY</span>
             <span className="no-price">{q ? fmtPrice(q.ask, info.digits) : '—'}</span>
           </button>
         </div>
+        <div className="mb-sheet-hint">One-click · 0.10 lot market order</div>
         <div className="mb-sheet-actions">
+          <button onClick={() => { app.openDialog('newOrder', symbol); onClose(); }}>New Order…</button>
           <button onClick={onChart}>Open Chart</button>
           <button onClick={onDetails}>Details</button>
-          <button onClick={() => { hideSymbol(symbol); onClose(); }}>Hide Symbol</button>
+          <button onClick={() => { hideSymbol(symbol); onClose(); }}>Hide</button>
         </div>
       </div>
     </div>
@@ -413,7 +433,7 @@ function DetailsScreen({ symbol, onBack }: { symbol: string; onBack: () => void 
         </div>
         <div className="mb-details-btns">
           <button className="mt-btn" onClick={() => { app.setSymbol(symbol); onBack(); }}>Open Chart</button>
-          <button className="mt-btn" onClick={() => { app.setSymbol(symbol); app.openDialog('newOrder', symbol); }}>New Order</button>
+          <button className="mt-btn" onClick={() => { app.setSymbol(symbol); app.openDialog('newOrder', symbol); onBack(); }}>New Order</button>
         </div>
       </div>
     </div>
@@ -449,6 +469,32 @@ function TradeScreen() {
         <div className="mb-acct-item"><span>Margin level</span><b>{summary.level > 0 ? `${summary.level.toFixed(2)}%` : '—'}</b></div>
       </div>
 
+      {trading.pendings.length > 0 && (
+        <div className="mb-sec-head">Pending Orders ({trading.pendings.length})</div>
+      )}
+      {trading.pendings.map((o) => {
+        const inf = getSymbol(o.symbol);
+        return (
+          <div key={o.ticket} className="mb-pos mb-pending">
+            <div className="mb-pos-row1">
+              <span className="mb-pos-sym">{o.symbol}</span>
+              <button className="mb-pend-cancel" onClick={() => trading.cancelPending(o.ticket)}>Cancel</button>
+            </div>
+            <div className="mb-pos-row2">
+              <span className={o.type.startsWith('buy') ? 'mw-up' : 'mw-down'}>{o.type}</span>
+              <span className="mb-pos-dim">{fmtVolume(o.volume)} @ {fmtPrice(o.price, inf.digits)}</span>
+            </div>
+            {(o.sl !== 0 || o.tp !== 0) && (
+              <div className="mb-pos-row2">
+                <span className="mb-pos-dim">
+                  S/L {o.sl ? fmtPrice(o.sl, inf.digits) : '—'} · T/P {o.tp ? fmtPrice(o.tp, inf.digits) : '—'}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
       {trading.positions.map((p) => {
         const inf = getSymbol(p.symbol);
         const q = quotes[p.symbol];
@@ -483,7 +529,7 @@ function TradeScreen() {
         );
       })}
 
-      {trading.positions.length === 0 && (
+      {trading.positions.length === 0 && trading.pendings.length === 0 && (
         <div className="tb-empty tb-empty-solo">No positions — tap ＋ to open a trade</div>
       )}
 

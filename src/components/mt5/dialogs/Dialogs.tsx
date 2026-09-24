@@ -55,38 +55,64 @@ export function NewOrderDialog({ preselect }: { preselect: string | null }) {
   const q = quotes[symbol];
 
   const [volume, setVolume] = useState('0.10');
+  const [price, setPrice] = useState('');
   const [sl, setSl] = useState('');
   const [tp, setTp] = useState('');
   const [comment, setComment] = useState('');
   const [error, setError] = useState('');
+  const [orderKind, setOrderKind] = useState<'instant' | 'buy limit' | 'sell limit' | 'buy stop' | 'sell stop'>('instant');
+  const isPending = orderKind !== 'instant';
 
   const vol = Math.max(0.01, Math.min(100, parseFloat(volume) || 0.01));
+  const pPrice = parseFloat(price);
 
   const submit = (type: 'buy' | 'sell') => {
     setError('');
     if (!q) return;
-    const price = type === 'buy' ? q.ask : q.bid;
+    const priceNow = type === 'buy' ? q.ask : q.bid;
     const slV = parseFloat(sl);
     const tpV = parseFloat(tp);
 
+    if (isPending) {
+      if (!price || !isFinite(pPrice) || pPrice <= 0) return setError('Enter a valid order price');
+      if (orderKind === 'buy limit' && pPrice >= q.ask) return setError('Buy Limit price must be below Ask');
+      if (orderKind === 'buy stop' && pPrice <= q.ask) return setError('Buy Stop price must be above Ask');
+      if (orderKind === 'sell limit' && pPrice <= q.bid) return setError('Sell Limit price must be above Bid');
+      if (orderKind === 'sell stop' && pPrice >= q.bid) return setError('Sell Stop price must be below Bid');
+    }
+
     if (sl) {
-      if (type === 'buy' && slV >= q.bid) return setError('For BUY orders S/L must be below Bid');
-      if (type === 'sell' && slV <= q.ask) return setError('For SELL orders S/L must be above Ask');
+      if (type === 'buy' && slV >= (isPending ? pPrice : q.bid)) return setError('For BUY orders S/L must be below the price');
+      if (type === 'sell' && slV <= (isPending ? pPrice : q.ask)) return setError('For SELL orders S/L must be above the price');
     }
     if (tp) {
-      if (type === 'buy' && tpV <= q.ask) return setError('For BUY orders T/P must be above Ask');
-      if (type === 'sell' && tpV >= q.bid) return setError('For SELL orders T/P must be below Bid');
+      if (type === 'buy' && tpV <= (isPending ? pPrice : q.ask)) return setError('For BUY orders T/P must be above the price');
+      if (type === 'sell' && tpV >= (isPending ? pPrice : q.bid)) return setError('For SELL orders T/P must be below the price');
+    }
+
+    if (isPending) {
+      const ticket = trading.placePending({
+        symbol,
+        type: orderKind,
+        volume: vol,
+        price: pPrice,
+        sl: slV || 0,
+        tp: tpV || 0,
+      });
+      trading.log(`pending order #${ticket} accepted: ${orderKind} ${vol.toFixed(2)} ${symbol} at ${fmtPrice(pPrice, info.digits)}`);
+      app.closeDialog();
+      return;
     }
 
     const ticket = trading.openPosition({
       symbol,
       type,
       volume: vol,
-      openPrice: price,
+      openPrice: priceNow,
       sl: slV || 0,
       tp: tpV || 0,
     });
-    trading.log(`order #${ticket} opened: ${type} ${vol.toFixed(2)} ${symbol} at ${fmtPrice(price, info.digits)}`);
+    trading.log(`order #${ticket} opened: ${type} ${vol.toFixed(2)} ${symbol} at ${fmtPrice(priceNow, info.digits)}`);
     app.closeDialog();
   };
 
@@ -107,6 +133,31 @@ export function NewOrderDialog({ preselect }: { preselect: string | null }) {
           <button onClick={() => setVolume((v) => (Math.min(100, (parseFloat(v) || 0.1) + 0.01)).toFixed(2))}>+</button>
         </div>
 
+        <label>Type</label>
+        <select
+          className="mt-input"
+          value={orderKind}
+          onChange={(e) => { setOrderKind(e.target.value as typeof orderKind); setPrice(''); }}
+        >
+          <option value="instant">Instant Execution</option>
+          <option value="buy limit">Buy Limit</option>
+          <option value="sell limit">Sell Limit</option>
+          <option value="buy stop">Buy Stop</option>
+          <option value="sell stop">Sell Stop</option>
+        </select>
+
+        {isPending && (
+          <>
+            <label>Order Price</label>
+            <input
+              className="mt-input"
+              placeholder={q ? fmtPrice(orderKind.startsWith('buy') ? q.ask : q.bid, info.digits) : ''}
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </>
+        )}
+
         <label>Stop Loss</label>
         <input className="mt-input" placeholder={q ? fmtPrice(q.bid - 50 * (info.spread || info.basePrice * 0.0001), info.digits) : ''} value={sl} onChange={(e) => setSl(e.target.value)} />
         <label>Take Profit</label>
@@ -114,25 +165,32 @@ export function NewOrderDialog({ preselect }: { preselect: string | null }) {
 
         <label>Comment</label>
         <input className="mt-input" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={27} />
-
-        <label>Type</label>
-        <div className="mt-input mt-input-static">Instant Execution</div>
       </div>
 
       {error && <div className="no-error">{error}</div>}
 
-      <div className="no-buttons">
-        <button className="mt-btn mt-btn-sell" onClick={() => submit('sell')} disabled={!q}>
-          <span>Sell</span>
-          <span className="no-price">{q ? fmtPrice(q.bid, info.digits) : '—'}</span>
-        </button>
-        <button className="mt-btn mt-btn-buy" onClick={() => submit('buy')} disabled={!q}>
-          <span>Buy</span>
-          <span className="no-price">{q ? fmtPrice(q.ask, info.digits) : '—'}</span>
-        </button>
-      </div>
+      {isPending ? (
+        <div className="no-buttons no-buttons-single">
+          <button className="mt-btn no-place-btn" onClick={() => submit(orderKind.startsWith('buy') ? 'buy' : 'sell')} disabled={!q}>
+            Place {orderKind} Order
+          </button>
+        </div>
+      ) : (
+        <div className="no-buttons">
+          <button className="mt-btn mt-btn-sell" onClick={() => submit('sell')} disabled={!q}>
+            <span>Sell</span>
+            <span className="no-price">{q ? fmtPrice(q.bid, info.digits) : '—'}</span>
+          </button>
+          <button className="mt-btn mt-btn-buy" onClick={() => submit('buy')} disabled={!q}>
+            <span>Buy</span>
+            <span className="no-price">{q ? fmtPrice(q.ask, info.digits) : '—'}</span>
+          </button>
+        </div>
+      )}
       <div className="no-footnote">
-        Market order · leverage 1:100 · demo account — profit currency {info.profitCurrency === 'USD' ? 'USD' : symbol.slice(3, 6)}
+        {isPending
+          ? `${orderKind} · activates when the market ${orderKind.includes('limit') ? 'reaches' : 'breaks through'} the order price`
+          : `Market order · leverage 1:100 · demo account — profit currency ${info.profitCurrency === 'USD' ? 'USD' : symbol.slice(3, 6)}`}
       </div>
     </DialogShell>
   );

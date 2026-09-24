@@ -1560,3 +1560,138 @@ select.mt-input { height: 26px; }
 
 /* chart canvas: let JS own all touch gestures (pan / pinch) */
 .chart-canvas { touch-action: none; }
+
+/* ============================================================
+   One-click trading panel (desktop chart overlay) — MT5 style
+   ============================================================ */
+.oc-panel {
+  position: absolute;
+  left: 10px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.6);
+  border: 1px solid #101010;
+  user-select: none;
+}
+
+.oc-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 14px;
+  border: none;
+  cursor: pointer;
+  font-family: var(--mt-font);
+}
+
+.oc-sell { background: linear-gradient(#a94442, #8d3230); }
+.oc-sell:hover { background: linear-gradient(#ba4e4c, #9c3b39); }
+
+.oc-buy { background: linear-gradient(#3d7a45, #2f6237); }
+.oc-buy:hover { background: linear-gradient(#47894f, #3a7143); }
+
+.oc-btn .oc-k {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.oc-btn .oc-p {
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+}
+
+.oc-vol {
+  display: flex;
+  align-items: center;
+  background: #242424;
+  padding: 0 2px;
+}
+
+.oc-vol span {
+  min-width: 38px;
+  text-align: center;
+  color: #e6e6e6;
+  font-size: 12px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+}
+
+.oc-vol button {
+  width: 20px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--mt-text-dim);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.oc-vol button:hover { color: #ffffff; }
+
+.oc-close {
+  width: 18px;
+  background: #2b2b2b;
+  border: none;
+  border-left: 1px solid #101010;
+  color: var(--mt-text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.oc-close:hover { background: #b0483f; color: #ffffff; }
+
+/* ---- pending order UI additions ---- */
+.mb-sec-head {
+  padding: 7px 12px 4px;
+  color: var(--mt-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-bottom: 1px solid #222222;
+}
+
+.mb-pos.mb-pending { background: rgba(185, 138, 44, 0.05); }
+
+.mb-pend-cancel {
+  background: transparent;
+  border: 1px solid #4a4a4a;
+  color: var(--mt-text-dim);
+  font-family: var(--mt-font);
+  font-size: 10px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+
+.mb-pend-cancel:active { background: #b0483f; border-color: #b0483f; color: #fff; }
+
+.mb-sheet-hint {
+  text-align: center;
+  color: var(--mt-text-dim);
+  font-size: 9px;
+  margin-bottom: 8px;
+}
+
+.tb-pending .tb-symbol-cell { font-weight: bold; color: var(--mt-text-bright); }
+
+/* single Place button in the order dialog (pending orders) */
+.no-buttons-single { justify-content: stretch; }
+
+.no-place-btn {
+  flex: 1;
+  background: linear-gradient(#4a5a78, #3a4a68);
+  color: #ffffff;
+  font-weight: bold;
+  padding: 8px 16px;
+}
+
+.no-place-btn:hover { background: linear-gradient(#55688a, #45577a); }

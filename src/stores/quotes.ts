@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { SYMBOLS } from '@/lib/symbols';
+import { useTrading } from '@/stores/trading';
 
 export interface TickRecord {
   t: number;
@@ -129,6 +130,8 @@ export const useQuotes = create<QuotesState>((set, get) => ({
         }
       }
       set({ quotes, tickBuffers: { ...buffers }, status: msg.status, lastTickAt: Date.now() });
+      // pending-order activation runs on every snapshot (MT5 server behaviour)
+      useTrading.getState().checkPendings(quotes);
     });
 
     es.addEventListener('quotes', (ev) => {
@@ -163,6 +166,7 @@ export const useQuotes = create<QuotesState>((set, get) => ({
         }
         return { quotes, tickBuffers: buffers, lastTickAt: Date.now() };
       });
+      useTrading.getState().checkPendings(get().quotes);
     });
 
     es.addEventListener('status', (ev) => {

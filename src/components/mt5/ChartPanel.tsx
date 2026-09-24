@@ -27,6 +27,7 @@ export function ChartPanel() {
   const [loading, setLoading] = useState(true);
   const [hover, setHover] = useState<Candle | null>(null);
   const [source, setSource] = useState<'tradingview' | 'simulated' | null>(null);
+  const [ocVol, setOcVol] = useState(0.1);
 
   const symbol = app.activeSymbol;
   const tf = app.timeframe;
@@ -97,6 +98,28 @@ export function ChartPanel() {
     if (!engine || !quote) return;
     engine.setQuote(quote.bid, quote.ask);
   }, [quote?.bid]);
+
+  // ---- pending order lines for the active symbol ------------------------------
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.orderLines = trading.pendings
+      .filter((o) => o.symbol === symbol)
+      .map((o) => ({
+        price: o.price,
+        label: `${o.type} ${o.volume.toFixed(2)}`,
+        color: o.type.startsWith('buy') ? '#00c853' : '#ff5252',
+      }));
+    engine.invalidate();
+  }, [trading.pendings, symbol]);
+
+  // ---- one-click trading ------------------------------------------------------
+  const oneClickTrade = (type: 'buy' | 'sell') => {
+    if (!quote) return;
+    const price = type === 'buy' ? quote.ask : quote.bid;
+    const ticket = trading.openPosition({ symbol, type, volume: ocVol, openPrice: price, sl: 0, tp: 0 });
+    trading.log(`one-click #${ticket}: ${type} ${ocVol.toFixed(2)} ${symbol} at ${fmtPrice(price, info.digits)}`);
+  };
 
   // ---- zoom via toolbar / menu events -------------------------------------------
   useEffect(() => {
@@ -281,6 +304,27 @@ export function ChartPanel() {
         {loading && (
           <div className="chart-loading">
             <span>Loading {symbol} {tf} history…</span>
+          </div>
+        )}
+
+        {app.oneClick && quote && (
+          <div className="oc-panel">
+            <button className="oc-btn oc-sell" onClick={() => oneClickTrade('sell')}>
+              <span className="oc-k">sell</span>
+              <span className="oc-p">{fmtPrice(quote.bid, info.digits)}</span>
+            </button>
+            <div className="oc-vol">
+              <button onClick={() => setOcVol((v) => Math.max(0.01, +(v - 0.01).toFixed(2)))}>−</button>
+              <span>{ocVol.toFixed(2)}</span>
+              <button onClick={() => setOcVol((v) => Math.min(100, +(v + 0.01).toFixed(2)))}>+</button>
+            </div>
+            <button className="oc-btn oc-buy" onClick={() => oneClickTrade('buy')}>
+              <span className="oc-k">buy</span>
+              <span className="oc-p">{fmtPrice(quote.ask, info.digits)}</span>
+            </button>
+            <button className="oc-close" title="Disable One Click Trading" onClick={() => app.toggleOneClick()}>
+              <IconCross size={9} />
+            </button>
           </div>
         )}
       </div>

@@ -83,6 +83,15 @@ function TradeTab() {
     ]);
   };
 
+  const pendMenu = (e: React.MouseEvent, ticket: number) => {
+    e.preventDefault();
+    app.openContextMenu(e.clientX, e.clientY, [
+      { label: 'New Order', shortcut: 'F9', onClick: () => app.openDialog('newOrder') },
+      { separator: true, label: '' },
+      { label: 'Cancel Order', onClick: () => trading.cancelPending(ticket) },
+    ]);
+  };
+
   const closePosition = (ticket: number) => {
     const pos = trading.positions.find((p) => p.ticket === ticket);
     if (!pos) return;
@@ -142,7 +151,30 @@ function TradeTab() {
                 </tr>
               );
             })}
-            {trading.positions.length === 0 && (
+            {trading.pendings.map((o) => {
+              const info = getSymbol(o.symbol);
+              return (
+                <tr key={o.ticket} className="tb-row tb-pending" onContextMenu={(e) => pendMenu(e, o.ticket)}>
+                  <td className="tb-cell tb-symbol-cell">{o.symbol}</td>
+                  <td className="tb-cell">{o.ticket}</td>
+                  <td className="tb-cell">{fmtDateTime(o.openTime)}</td>
+                  <td className={`tb-cell ${o.type.startsWith('buy') ? 'mw-up' : 'mw-down'}`}>{o.type}</td>
+                  <td className="tb-cell">{fmtVolume(o.volume)}</td>
+                  <td className="tb-cell">{fmtPrice(o.price, info.digits)}</td>
+                  <td className="tb-cell tb-dim">{o.sl ? fmtPrice(o.sl, info.digits) : ''}</td>
+                  <td className="tb-cell tb-dim">{o.tp ? fmtPrice(o.tp, info.digits) : ''}</td>
+                  <td className="tb-cell tb-dim">—</td>
+                  <td className="tb-cell">—</td>
+                  <td className="tb-cell tb-dim">—</td>
+                  <td className="tb-cell tb-x">
+                    <button className="tb-close-btn" title={`Cancel #${o.ticket}`} onClick={() => trading.cancelPending(o.ticket)}>
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {trading.positions.length === 0 && trading.pendings.length === 0 && (
               <tr>
                 <td className="tb-empty" colSpan={12}>
                   No positions — press F9 or use File → New Order to open a trade

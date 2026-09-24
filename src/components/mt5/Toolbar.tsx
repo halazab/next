@@ -89,10 +89,23 @@ export function Toolbar() {
           <IconSeparator />
         </TBtn>
         <Sep />
+        <TBtn title="One Click Trading" active={app.oneClick} onClick={() => app.toggleOneClick()}>
+          <IconOneClick />
+        </TBtn>
         <TBtn title="Chart Properties..." onClick={() => app.openDialog('properties')}>
           <IconProperties />
         </TBtn>
       </div>
     </div>
+  );
+}
+
+function IconOneClick({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16">
+      <path d="M3 2.5l9.5 5-4 1.2 2.3 4-1.8 1-2.3-4-3 2.8z" fill="none" stroke="#d8d8d8" strokeWidth="1" />
+      <circle cx="12.5" cy="12.5" r="2.2" fill="#3fa142" />
+      <path d="M12.5 11.4v2.2M11.4 12.5h2.2" stroke="#ffffff" strokeWidth="0.9" />
+    </svg>
   );
 }
