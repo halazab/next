@@ -183,3 +183,17 @@ Work Log:
 
 Stage Summary:
 - Chart now pans freely in any direction like TradingView; auto-fit disengages on vertical drag and returns via dblclick on the price axis
+
+---
+Task ID: frozen-axis-fix
+Agent: Main Agent
+Task: Fix price-axis scaling becoming non-functional after vertical pan (frozen scale)
+
+Work Log:
+- Root cause: vFrozen short-circuited priceRange(), so priceScaleK had no effect once the scale was frozen by vertical panning
+- Fix: added vFrozenK (compression on top of the frozen scale); price-axis mousedown captures frozenBase = current vFrozen when frozen; drag recomputes vFrozen = frozenBase scaled around its centre; auto-fit path unchanged
+- vFrozenK reset on freeze / dblclick reset / setData
+- Verified desktop: pan down (freeze) → axis drag down compresses frozen range, up expands, dblclick re-fits; time-axis zoom still works after pan; no console errors
+
+Stage Summary:
+- Price-axis vertical scaling now works in both auto-fit and manual (frozen) scale modes

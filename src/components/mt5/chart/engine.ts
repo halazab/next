@@ -89,6 +89,8 @@ export class ChartEngine {
    *  via double-click on the price axis or a new symbol/timeframe */
   private vFrozen: { min: number; max: number } | null = null;
   private frozenBase: { min: number; max: number } | null = null;
+  /** compression factor applied on top of the frozen (manual) scale */
+  private vFrozenK = 1;
   private vAnchorY = 0;
   private vPpp = 0;
   /** TradingView-style vertical compression of the price scale (1 = auto-fit) */
@@ -169,6 +171,7 @@ export class ChartEngine {
     this.priceScaleK = 1; // fresh auto-fit for the new symbol / timeframe
     this.vFrozen = null; // re-engage vertical auto-fit
     this.frozenBase = null;
+    this.vFrozenK = 1;
     this.invalidate();
   }
 
@@ -233,7 +236,9 @@ export class ChartEngine {
     if (x > plotW && y <= plotH) {
       this.dragAxis = 'price';
       this.axisStart = y;
-      this.axisStartK = this.priceScaleK;
+      // manual (frozen) scale → compress/expand it in place
+      this.axisStartK = this.vFrozen ? this.vFrozenK : this.priceScaleK;
+      if (this.vFrozen) this.frozenBase = { ...this.vFrozen };
       this.canvas.style.cursor = 'ns-resize';
       return;
     }
@@ -274,11 +279,19 @@ export class ChartEngine {
       return;
     }
     // price-axis drag → vertical compression: down compresses (zoom out,
-    // more range in view), up stretches (zoom in) — around the centre
+    // more range in view), up stretches (zoom in) — around the centre;
+    // works in both auto-fit and manual (frozen) scale modes
     if (dragging && this.dragAxis === 'price') {
       const dy = y - this.axisStart;
-      const next = this.axisStartK * Math.pow(2, dy / 120);
-      this.priceScaleK = Math.min(12, Math.max(0.15, next));
+      const next = Math.min(12, Math.max(0.15, this.axisStartK * Math.pow(2, dy / 120)));
+      if (this.vFrozen && this.frozenBase) {
+        this.vFrozenK = next;
+        const c = (this.frozenBase.min + this.frozenBase.max) / 2;
+        const half = ((this.frozenBase.max - this.frozenBase.min) / 2) * next;
+        this.vFrozen = { min: c - half, max: c + half };
+      } else {
+        this.priceScaleK = next;
+      }
       this.canvas.style.cursor = 'ns-resize';
       this.invalidate();
       return;
@@ -315,6 +328,7 @@ export class ChartEngine {
       if (this.vFrozen === null && Math.abs(dy) > 2) {
         this.vFrozen = { ...this.scale };
         this.frozenBase = { ...this.scale };
+        this.vFrozenK = 1; // captured scale already includes priceScaleK
         this.vAnchorY = y;
         this.vPpp = (this.scale.max - this.scale.min) / (this.height - PAD_BOTTOM - 10);
       }
@@ -379,6 +393,7 @@ export class ChartEngine {
       this.priceScaleK = 1;
       this.vFrozen = null; // back to vertical auto-fit
       this.frozenBase = null;
+      this.vFrozenK = 1;
     } else if (y > plotH) {
       this.barWidth = 9;
       this.rightOffset = 0;
