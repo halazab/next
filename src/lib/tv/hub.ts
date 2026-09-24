@@ -9,7 +9,7 @@ import { SYMBOLS, SYMBOL_MAP, type Quote } from '@/lib/symbols';
 
 export type FeedSource = 'tradingview' | 'simulated';
 
-interface HubQuote extends Quote {
+export interface HubQuote extends Quote {
   source: FeedSource;
   volume: number;
   prev_close: number;

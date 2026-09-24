@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { hubReady, type FeedSource } from '@/lib/tv/hub';
+import { hubReady, type FeedSource, type HubQuote } from '@/lib/tv/hub';
 import { SYMBOLS } from '@/lib/symbols';
 
 export const dynamic = 'force-dynamic';
@@ -18,7 +18,7 @@ interface WireQuote {
   s: FeedSource; // per-symbol source
 }
 
-function toWire(q: Record<string, unknown>): WireQuote {
+function toWire(q: HubQuote): WireQuote {
   return {
     b: q.bid as number,
     a: q.ask as number,
@@ -37,7 +37,6 @@ export async function GET(req: NextRequest) {
   const hub = await hubReady();
 
   const encoder = new TextEncoder();
-  let unsubscribe: (() => void) | null = null;
   let pushTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let closed = false;
@@ -86,7 +85,6 @@ export async function GET(req: NextRequest) {
         closed = true;
         if (pushTimer) clearInterval(pushTimer);
         if (heartbeat) clearInterval(heartbeat);
-        if (unsubscribe) unsubscribe();
         try {
           controller.close();
         } catch {
@@ -98,7 +96,6 @@ export async function GET(req: NextRequest) {
       closed = true;
       if (pushTimer) clearInterval(pushTimer);
       if (heartbeat) clearInterval(heartbeat);
-      if (unsubscribe) unsubscribe();
     },
   });
 
@@ -112,6 +109,6 @@ export async function GET(req: NextRequest) {
   });
 }
 
-function sig(q: Record<string, unknown>): string {
+function sig(q: HubQuote): string {
   return `${q.bid}|${q.dir}|${q.time}|${q.high}|${q.low}`;
 }

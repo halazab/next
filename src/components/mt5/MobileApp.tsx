@@ -21,6 +21,42 @@ import { ChartPanel } from './ChartPanel';
 
 type MTab = 'quotes' | 'chart' | 'trade' | 'history';
 
+// ------------------------------------------------- chart one-click trading
+
+function MbOneClickBar({ symbol }: { symbol: string }) {
+  // narrow selector — re-renders only when THIS symbol's quote changes,
+  // so the bid/ask on the buttons stay in sync with the SSE stream
+  const q = useQuotes((s) => s.quotes[symbol]);
+  const trading = useTrading();
+  const [vol, setVol] = useState(0.1);
+  const info = getSymbol(symbol);
+
+  const trade = (type: 'buy' | 'sell') => {
+    if (!q) return;
+    const price = type === 'buy' ? q.ask : q.bid;
+    const ticket = trading.openPosition({ symbol, type, volume: vol, openPrice: price, sl: 0, tp: 0 });
+    trading.log(`one-click #${ticket}: ${type} ${vol.toFixed(2)} ${symbol} at ${fmtPrice(price, info.digits)}`);
+  };
+
+  return (
+    <div className="mb-oc">
+      <button className="mb-oc-btn mb-oc-sell" disabled={!q} onClick={() => trade('sell')}>
+        <span className="mb-oc-k">SELL</span>
+        <span className="mb-oc-p">{q ? fmtPrice(q.bid, info.digits) : '—'}</span>
+      </button>
+      <div className="mb-oc-vol">
+        <button aria-label="Decrease volume" onClick={() => setVol((v) => Math.max(0.01, +(v - 0.01).toFixed(2)))}>−</button>
+        <span>{vol.toFixed(2)}</span>
+        <button aria-label="Increase volume" onClick={() => setVol((v) => Math.min(100, +(v + 0.01).toFixed(2)))}>+</button>
+      </div>
+      <button className="mb-oc-btn mb-oc-buy" disabled={!q} onClick={() => trade('buy')}>
+        <span className="mb-oc-k">BUY</span>
+        <span className="mb-oc-p">{q ? fmtPrice(q.ask, info.digits) : '—'}</span>
+      </button>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- tab icons
 
 function IconTabQuotes({ active }: { active: boolean }) {
@@ -187,8 +223,9 @@ export function MobileApp() {
                 <IconIndicators size={15} />
               </span>
             </div>
+            <MbOneClickBar symbol={app.activeSymbol} />
             <div className="mb-chart-holder">
-              <ChartPanel />
+              <ChartPanel countdown />
             </div>
             <button className="mb-fab" aria-label="New Order" onClick={() => app.openDialog('newOrder')}>＋</button>
           </>

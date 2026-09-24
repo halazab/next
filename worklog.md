@@ -83,3 +83,23 @@ Work Log:
 Stage Summary:
 - MT5 clone now ships trailing stops (with real SL/TP execution on ticks), pending-order price modification (drag on chart + dialog), and MT5-style draggable S/L, T/P and order lines with live axis tags — plus the chart orientation is now truly MT5-correct
 - Artifacts touched: chart/engine.ts, ChartPanel.tsx, Toolbox.tsx, MobileApp.tsx, dialogs/Dialogs.tsx, stores/{trading,quotes,app}.ts, lib/calc.ts, globals.css
+
+---
+Task ID: 5
+Agent: main (Super Z)
+Task: Add the MT5 candle-close time counter and one-click Buy/Sell buttons to the mobile chart, with strict real-time (no-delay) behaviour
+
+Work Log:
+- Engine (chart/engine.ts): added showCountdown flag + setCountdown(on) that owns a private 1s setInterval → invalidate() — the countdown repaints directly on canvas with ZERO React re-renders; interval skips repaints while document.hidden (battery friendly), cleared on disable/unmount
+- Render: countdown tag drawn AFTER the price-axis section (so axis labels can never overpaint it) as a small gray #5A5A5A tag directly below the bid price tag (flips above it near the bottom edge), counting down to the live bar close (last.time + tfSeconds − now, clamped at 00:00); MT5 format — MM:SS under 1h, H:MM:SS for H4/D1/W1/MN
+- ChartPanel: new optional countdown prop (default false → desktop untouched); effect wires engine.setCountdown with cleanup on unmount/tab switch
+- MobileApp: new MbOneClickBar rendered above the chart on the Charts tab — MT5-style SELL (red gradient, live Bid) | volume stepper −/0.10/+ | BUY (green gradient, live Ask); taps execute an instant market order at that price via openPosition + journal log; subscribes via narrow zustand selector useQuotes(s => s.quotes[symbol]) so only this component re-renders on each ~300ms SSE batch (realtime prices, no layout-wide re-render); tabular-nums prevents price jitter
+- globals.css: additive .mb-oc* block (bar, buttons reusing the desktop one-click palette, stepper)
+- Fixed pre-existing tsc errors in src/app/api/quotes/route.ts while verifying: exported HubQuote from lib/tv/hub.ts and typed toWire/sig with it; removed dead never-narrowed `unsubscribe` variable (non-runtime change)
+- Browser-verified at 390×844: bar shows live SELL 1.32130 / BUY 1.32148 (prices streamed 1.32130→1.32150 while watching); countdown ticked 02:16 → 02:12 across exactly 4s (zero drift); H1 shows 30:15 MM:SS format; volume stepper 0.10→0.12; one-click BUY opened position instantly (visible on Trade tab) and ✕ close landed in History as GBPUSD buy 0.10 −1.10 USD, balance back to exactly 10 000.00; desktop re-verified at 1440×900 pixel-identical (no countdown tag, no mobile bar, no positions); tsc + eslint clean; no console/page errors
+- Test trade cleaned up afterwards
+
+Stage Summary:
+- Mobile chart now has the MT5 candle countdown (1 Hz canvas tag under the bid tag, no React overhead) and always-on one-click SELL/BUY buttons with live bid/ask and volume stepper — desktop terminal untouched
+- Artifacts touched: chart/engine.ts, ChartPanel.tsx, MobileApp.tsx, globals.css, api/quotes/route.ts + lib/tv/hub.ts (type fix)
+- Screenshots: scripts/mt5-mb-oc-1..3.png (+crops), mt5-mb-h1.png, mt5-mb-hist.png, mt5-desk-oc-check.png

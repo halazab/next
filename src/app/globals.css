@@ -1523,6 +1523,82 @@ select.mt-input { height: 26px; }
 
 .mb-fab:active { background: #2a7ad6; }
 
+/* ---- chart one-click trading bar (MT5 mobile style) ---- */
+.mb-oc {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  background: #222222;
+  border-bottom: 1px solid var(--mt-border);
+  flex-shrink: 0;
+}
+
+.mb-oc-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 4px 6px;
+  border: none;
+  color: #ffffff;
+  cursor: pointer;
+  font-family: var(--mt-font);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mb-oc-btn:disabled { opacity: 0.45; cursor: default; }
+.mb-oc-sell { background: linear-gradient(#a94442, #8d3230); }
+.mb-oc-sell:active { background: linear-gradient(#ba4e4c, #9c3b39); }
+.mb-oc-buy { background: linear-gradient(#3d7a45, #2f6237); }
+.mb-oc-buy:active { background: linear-gradient(#47894f, #3a7143); }
+
+.mb-oc-k {
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.4px;
+  opacity: 0.9;
+}
+
+.mb-oc-p {
+  font-size: 13px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mb-oc-vol {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--mt-frame-2);
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.mb-oc-vol button {
+  width: 27px;
+  align-self: stretch;
+  border: none;
+  background: transparent;
+  color: var(--mt-text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  font-family: var(--mt-font);
+}
+
+.mb-oc-vol button:active { color: #ffffff; }
+
+.mb-oc-vol span {
+  min-width: 36px;
+  text-align: center;
+  color: var(--mt-text-bright);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- bottom tab bar ---- */
 .mb-tabbar {
   height: calc(52px + env(safe-area-inset-bottom));

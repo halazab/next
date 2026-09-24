@@ -74,12 +74,15 @@ export class ChartEngine {
   /** bars hidden at the right edge (0 = latest bar visible) */
   rightOffset = 0;
   autoScroll = true;
+  /** MT5 candle countdown timer on the price scale (mobile chart) */
+  showCountdown = false;
   /** trade levels drawn over the plot (entries, S/L, T/P, pendings) */
   tradeLines: EngineTradeLine[] = [];
   /** called when a draggable line is released at a new price */
   onLineRelease: (id: string, price: number) => void = () => {};
 
   private crosshair: { x: number; y: number } | null = null;
+  private countdownTimer: ReturnType<typeof setInterval> | null = null;
   private drag: { startX: number; startOffset: number } | null = null;
   /** id of the trade line currently being dragged, if any */
   private dragLineId: string | null = null;
@@ -122,6 +125,25 @@ export class ChartEngine {
           this.render();
         }
       });
+    }
+  }
+
+  /** enable/disable the candle-close countdown; a private 1s interval
+   *  repaints the tag with zero React involvement (no re-render, no lag) */
+  setCountdown(on: boolean): void {
+    if (on === this.showCountdown) return;
+    this.showCountdown = on;
+    if (on) {
+      this.countdownTimer = setInterval(() => {
+        // skip repaints while the page is hidden (battery friendly)
+        if (typeof document !== 'undefined' && document.hidden) return;
+        this.invalidate();
+      }, 1000);
+      this.invalidate();
+    } else if (this.countdownTimer !== null) {
+      clearInterval(this.countdownTimer);
+      this.countdownTimer = null;
+      this.invalidate();
     }
   }
 
@@ -604,6 +626,30 @@ export class ChartEngine {
     ctx.moveTo(0, plotH + 0.5);
     ctx.lineTo(plotW, plotH + 0.5);
     ctx.stroke();
+
+    // ---- candle countdown (MT5 price-scale timer) ----------------------------
+    // small tag right under the bid tag counting down to the bar close;
+    // drawn after the price axis so axis labels never overpaint it
+    if (this.showCountdown && this.bid > 0 && this.bid >= min && this.bid <= max) {
+      const last = this.candles[this.candles.length - 1];
+      const rem = Math.max(0, last.time + this.tfSeconds - Date.now() / 1000);
+      const hh = Math.floor(rem / 3600);
+      const mm = Math.floor((rem % 3600) / 60);
+      const ss = Math.floor(rem % 60);
+      const pad2 = (n: number) => String(n).padStart(2, '0');
+      const label = hh > 0 ? `${hh}:${pad2(mm)}:${pad2(ss)}` : `${pad2(mm)}:${pad2(ss)}`;
+
+      const by = yOf(this.bid);
+      // bid tag spans by-9 .. by+9 → place the countdown directly below,
+      // or flip above when it would run off the bottom edge
+      let ty = by + 10;
+      if (ty + 16 > plotH) ty = by - 26;
+      ctx.fillStyle = '#5A5A5A';
+      ctx.fillRect(plotW + 1, ty, PAD_RIGHT - 2, 16);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, plotW + PAD_RIGHT / 2, ty + 12);
+    }
 
     // ---- time axis ------------------------------------------------------------
     const tStep = this.timeStep();

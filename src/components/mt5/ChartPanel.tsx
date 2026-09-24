@@ -14,7 +14,7 @@ import { ChartEngine, type EngineIndicator, type EngineTradeLine } from './chart
 import { SCHEMES } from '@/stores/app';
 import { IconCross } from './icons';
 
-export function ChartPanel() {
+export function ChartPanel({ countdown = false }: { countdown?: boolean }) {
   const app = useApp();
   const quotes = useQuotes();
   const trading = useTrading();
@@ -200,6 +200,15 @@ export function ChartPanel() {
     if (!engine) return;
     engine.onLineRelease = handleLineRelease;
   }, [handleLineRelease]);
+
+  // ---- candle countdown timer (MT5 mobile price-scale tag) -------------------
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setCountdown(countdown);
+    // stop the engine's 1s repaint timer when unmounting / toggling off
+    return () => engine.setCountdown(false);
+  }, [countdown]);
 
   // ---- one-click trading ------------------------------------------------------
   const oneClickTrade = (type: 'buy' | 'sell') => {
