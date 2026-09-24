@@ -123,3 +123,18 @@ Stage Summary:
 - The clone now behaves like a real MT5 trade server: pendings, S/L, T/P and trailing stops execute around the clock on the server (TradingView hub) even with the platform closed, persist across restarts, and are adopted back into History/Journal on the next launch; mobile header/chart decluttered per request
 - Artifacts: NEW src/lib/trade-rules.ts, src/lib/server/executor.ts, src/app/api/trading/route.ts, .mt5-server-state.json (runtime store); EDITED stores/trading.ts, MobileApp.tsx, globals.css
 - Screenshots: scripts/mt5-server-adopt.png, mt5-mb-noplus.png, mt5-desk-final.png
+
+---
+Task ID: git-push
+Agent: Main Agent
+Task: Create new GitHub repo "next" with provided token and push project
+
+Work Log:
+- Verified token, identified account: halazab
+- Created public repo halazab/next via GitHub API
+- Added .env / db/ / .mt5-server-state.json to .gitignore, removed from tracking (runtime files)
+- Committed all changes, pushed main branch (token used inline only, not persisted)
+
+Stage Summary:
+- Repo live at https://github.com/halazab/next
+- .env confirmed absent from repo (404), no secrets pushed
