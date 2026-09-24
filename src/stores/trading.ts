@@ -4,8 +4,8 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { getSymbol } from '@/lib/symbols';
 import { profitAt } from '@/lib/calc';
+import { decideTrades } from '@/lib/trade-rules';
 
 export interface Position {
   ticket: number;
@@ -241,98 +241,61 @@ export const useTrading = create<TradingState>()(
       },
 
       checkStops: (quotes) => {
+        // wait for the first server adoption check — avoids executing on
+        // a stale copy right after the page loads
+        if (!isSyncReady()) return;
         const st = get();
         if (st.positions.length === 0) return;
 
+        const { closes, trail } = decideTrades(st.positions, [], quotes);
+
         // 1) S/L & T/P execution — closes at the stop price (MT5 server)
-        for (const p of st.positions) {
-          const q = quotes[p.symbol];
-          if (!q) continue;
-          if (p.type === 'buy') {
-            if (p.sl > 0 && q.bid <= p.sl) {
-              get().closePosition(p.ticket, p.sl, profitAt(p, p.sl, quotes));
-              get().log(`stop loss hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.sl}`, 'trade');
-              continue;
-            }
-            if (p.tp > 0 && q.bid >= p.tp) {
-              get().closePosition(p.ticket, p.tp, profitAt(p, p.tp, quotes));
-              get().log(`take profit hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.tp}`, 'trade');
-              continue;
-            }
-          } else {
-            if (p.sl > 0 && q.ask >= p.sl) {
-              get().closePosition(p.ticket, p.sl, profitAt(p, p.sl, quotes));
-              get().log(`stop loss hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.sl}`, 'trade');
-              continue;
-            }
-            if (p.tp > 0 && q.ask <= p.tp) {
-              get().closePosition(p.ticket, p.tp, profitAt(p, p.tp, quotes));
-              get().log(`take profit hit #${p.ticket} ${p.symbol} — closed ${p.volume.toFixed(2)} at ${p.tp}`, 'trade');
-              continue;
-            }
-          }
+        for (const c of closes) {
+          const pos = st.positions.find((p) => p.ticket === c.ticket);
+          if (!pos) continue;
+          get().closePosition(c.ticket, c.closePrice, profitAt(pos, c.closePrice, quotes));
+          get().log(
+            `${c.reason === 'sl' ? 'stop loss' : 'take profit'} hit #${pos.ticket} ${pos.symbol} — closed ${pos.volume.toFixed(2)} at ${c.closePrice}`,
+            'trade',
+          );
         }
 
         // 2) trailing-stop maintenance — S/L follows the price by `ts`
         //    points once the position is in profit by that distance;
         //    it never moves against the position
-        for (const p of get().positions) {
-          if (!p.ts || p.ts <= 0) continue;
-          const q = quotes[p.symbol];
-          if (!q) continue;
-          const info = getSymbol(p.symbol);
-          const point = 10 ** -info.digits;
-          const dist = p.ts * point;
-          if (p.type === 'buy') {
-            if (q.bid - p.openPrice >= dist) {
-              const newSl = Number((q.bid - dist).toFixed(info.digits));
-              if (p.sl === 0 || newSl > p.sl + point / 2) {
-                set((cur) => ({
-                  positions: cur.positions.map((x) => (x.ticket === p.ticket ? { ...x, sl: newSl } : x)),
-                }));
-              }
-            }
-          } else {
-            if (p.openPrice - q.ask >= dist) {
-              const newSl = Number((q.ask + dist).toFixed(info.digits));
-              if (p.sl === 0 || newSl < p.sl - point / 2) {
-                set((cur) => ({
-                  positions: cur.positions.map((x) => (x.ticket === p.ticket ? { ...x, sl: newSl } : x)),
-                }));
-              }
-            }
-          }
+        if (trail.length > 0) {
+          set((cur) => ({
+            positions: cur.positions.map((p) => {
+              const t = trail.find((x) => x.ticket === p.ticket);
+              return t ? { ...p, sl: t.sl } : p;
+            }),
+          }));
         }
       },
 
       checkPendings: (quotes) => {
+        if (!isSyncReady()) return;
         const st = get();
         if (st.pendings.length === 0) return;
-        const filled: { order: PendingOrder; type: 'buy' | 'sell' }[] = [];
-        for (const o of st.pendings) {
-          const q = quotes[o.symbol];
-          if (!q) continue;
-          if (o.type === 'buy limit' && q.ask <= o.price) filled.push({ order: o, type: 'buy' });
-          else if (o.type === 'buy stop' && q.ask >= o.price) filled.push({ order: o, type: 'buy' });
-          else if (o.type === 'sell limit' && q.bid >= o.price) filled.push({ order: o, type: 'sell' });
-          else if (o.type === 'sell stop' && q.bid <= o.price) filled.push({ order: o, type: 'sell' });
-        }
-        if (filled.length === 0) return;
-        const filledTickets = new Set(filled.map((f) => f.order.ticket));
+        const { activations } = decideTrades([], st.pendings, quotes);
+        if (activations.length === 0) return;
+        const actTickets = new Set(activations.map((a) => a.ticket));
+        const filled = st.pendings.filter((o) => actTickets.has(o.ticket));
         set((cur) => ({
-          pendings: cur.pendings.filter((o) => !filledTickets.has(o.ticket)),
+          pendings: cur.pendings.filter((o) => !actTickets.has(o.ticket)),
         }));
         for (const f of filled) {
+          const type: 'buy' | 'sell' = f.type.startsWith('buy') ? 'buy' : 'sell';
           get().openPosition({
-            symbol: f.order.symbol,
-            type: f.type,
-            volume: f.order.volume,
-            openPrice: f.order.price,
-            sl: f.order.sl,
-            tp: f.order.tp,
+            symbol: f.symbol,
+            type,
+            volume: f.volume,
+            openPrice: f.price,
+            sl: f.sl,
+            tp: f.tp,
           });
           get().log(
-            `order #${f.order.ticket} ${f.order.type} activated — opened #${ticketSeq - 1} ${f.type} ${f.order.volume.toFixed(2)} ${f.order.symbol} at ${f.order.price}`,
+            `order #${f.ticket} ${f.type} activated — opened #${ticketSeq - 1} ${type} ${f.volume.toFixed(2)} ${f.symbol} at ${f.price}`,
           );
         }
       },
@@ -380,4 +343,172 @@ export function seedJournal(): JournalEntry[] {
     { time: t, text: 'account 51234567 authorized (demo), leverage 1:100', level: 'info' },
     { time: t, text: "Network 'TradingView-API' connected — market data provider ready", level: 'info' },
   ];
+}
+
+// ---------------------------------------------------------------------------
+// Trade-server sync — lets the trade server execute pending orders, S/L,
+// T/P and trailing stops while the platform (browser) is CLOSED:
+//   • every change + a 3s heartbeat is pushed to /api/trading
+//   • when heartbeats stop (platform closed) the server executor takes over
+//   • on the next load the client adopts the server state, so deals made
+//     while away appear in History / Journal
+// ---------------------------------------------------------------------------
+
+interface ServerSyncState {
+  balance: number;
+  currency: string;
+  positions: Position[];
+  pendings: PendingOrder[];
+  deals: Deal[];
+  notes: { id: number; t: number; text: string }[];
+  updatedAt: number;
+  execSeq: number;
+}
+
+let hydrated = false;
+let localUpdatedAt = 0;
+let seenExecSeq = 0;
+let lastNoteId = 0;
+let syncReady = false;
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+/** true once the first adoption check has completed */
+export function isSyncReady(): boolean {
+  return syncReady;
+}
+
+function syncPayload(): string {
+  const st = useTrading.getState();
+  return JSON.stringify({
+    kind: 'client',
+    clientUpdatedAt: localUpdatedAt,
+    seenExecSeq,
+    lastNoteId,
+    state: {
+      balance: st.balance,
+      currency: st.currency,
+      positions: st.positions,
+      pendings: st.pendings,
+      deals: st.deals,
+    },
+  });
+}
+
+async function pushNow(): Promise<void> {
+  if (!syncReady) return;
+  try {
+    const res = await fetch('/api/trading', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: syncPayload(),
+      keepalive: true,
+    });
+    if (res.status === 409) {
+      // client is stale (server executed trades while we were away) — adopt
+      await adoptFromServer();
+      return;
+    }
+    if (res.ok) {
+      const data = (await res.json()) as { execSeq?: number };
+      if (typeof data.execSeq === 'number') seenExecSeq = data.execSeq;
+    }
+  } catch {
+    /* offline — the heartbeat retries */
+  }
+}
+
+function schedulePush(): void {
+  if (!syncReady || pushTimer) return;
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    void pushNow();
+  }, 250);
+}
+
+/** fetch the server state and adopt it when the server is newer */
+async function adoptFromServer(): Promise<void> {
+  try {
+    const res = await fetch('/api/trading', { cache: 'no-store' });
+    const data = (await res.json()) as { state: ServerSyncState | null };
+    const srv = data.state;
+    if (srv) {
+      seenExecSeq = srv.execSeq ?? 0;
+      if (srv.updatedAt > localUpdatedAt) {
+        // restore the ticket sequence above any server-side ticket
+        const maxUsed = Math.max(
+          ...srv.positions.map((p) => p.ticket),
+          ...srv.deals.map((d) => d.ticket),
+          ...srv.pendings.map((o) => o.ticket),
+          51_000_000,
+        );
+        ticketSeq = Math.max(ticketSeq, maxUsed + 1);
+
+        const notes = srv.notes ?? [];
+        if (notes.length > 0) lastNoteId = Math.max(lastNoteId, ...notes.map((n) => n.id));
+        const prevDeals = useTrading.getState().deals.length;
+        useTrading.setState((st) => ({
+          balance: srv.balance,
+          positions: srv.positions,
+          pendings: srv.pendings,
+          deals: srv.deals,
+          journal: [
+            ...st.journal,
+            ...notes.map((n) => ({ time: n.t, text: n.text, level: 'trade' as const })),
+            ...(notes.length > 0
+              ? [{
+                  time: Date.now(),
+                  text: `platform was closed — trade server executed ${notes.length} action(s), ${srv.deals.length - prevDeals} new deal(s)`,
+                  level: 'info' as const,
+                }]
+              : []),
+          ],
+        }));
+        localUpdatedAt = Date.now();
+      }
+    }
+  } catch {
+    /* server unreachable — retry via heartbeat */
+  } finally {
+    if (!syncReady) {
+      syncReady = true;
+      void pushNow(); // announce ourselves → server executor goes back to sleep
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  // localStorage persistence is synchronous — hydration is done by now
+  hydrated = true;
+
+  useTrading.subscribe(() => {
+    if (!hydrated) return;
+    localUpdatedAt = Date.now();
+    schedulePush();
+  });
+
+  // adoption check on load — brings in anything executed while away
+  void adoptFromServer();
+
+  // heartbeat — keeps the server executor idle while the platform is open
+  heartbeatTimer = setInterval(() => {
+    void pushNow();
+  }, 3000);
+
+  // final state push when the page goes away (tab close / navigate)
+  window.addEventListener('pagehide', () => {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/trading', new Blob([syncPayload()], { type: 'application/json' }));
+    }
+  });
+
+  // instant re-sync when the tab becomes visible again
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void pushNow();
+  });
+}
+
+// keep the heartbeat timer referenced so bundlers never trim it
+export function stopTradeHeartbeatForTests(): void {
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
 }

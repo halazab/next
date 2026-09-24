@@ -103,3 +103,23 @@ Stage Summary:
 - Mobile chart now has the MT5 candle countdown (1 Hz canvas tag under the bid tag, no React overhead) and always-on one-click SELL/BUY buttons with live bid/ask and volume stepper — desktop terminal untouched
 - Artifacts touched: chart/engine.ts, ChartPanel.tsx, MobileApp.tsx, globals.css, api/quotes/route.ts + lib/tv/hub.ts (type fix)
 - Screenshots: scripts/mt5-mb-oc-1..3.png (+crops), mt5-mb-h1.png, mt5-mb-hist.png, mt5-desk-oc-check.png
+
+---
+Task ID: 6
+Agent: main (Super Z)
+Task: Remove the mobile top + button (and chart FAB); add server-side trade execution so pending orders / S/L / T/P / trailing still execute while the platform (browser) is closed
+
+Work Log:
+- Mobile UI removals (MobileApp.tsx): deleted the blue top-right + button from the header (a 36px mb-header-spacer keeps the symbol/price centred) and the floating ＋ FAB from the Charts screen — both were redundant with the one-click SELL/BUY bar; Trade-screen FAB and hamburger→New Order kept; CSS additive (.mb-header-spacer)
+- Extracted the execution rules into src/lib/trade-rules.ts — decideTrades(positions, pendings, quotes) returns {closes: S/L|T/P hits at stop price, trail: trailing S/L updates, activations: pending fills at order price} — the single source of truth used by BOTH the client store and the server executor; trading.ts checkStops/checkPendings now apply these decisions (journal texts unchanged) and are gated by isSyncReady() to avoid executing on a stale copy during load
+- Server executor (src/lib/server/executor.ts, globalThis singleton): ingests the client account snapshot, persists it to .mt5-server-state.json (single-flight writes, survives server restarts), and runs a 600ms tick on the shared TradingView hub — after a 5s client-silence grace it activates pendings (new tickets from server seq), executes S/L/T/P via profitAt, maintains trailing stops, records deals + server notes, bumps execSeq; hubReady() is awaited so the feed streams even with zero browsers
+- API (src/app/api/trading/route.ts): GET → server state for adoption; POST → ingest (409 + full state when the client is stale, i.e. it missed server-side executions — keyed by seenExecSeq)
+- Client sync (trading.ts): pushes on every mutation (250ms debounce) + 3s heartbeat + pagehide sendBeacon + visibilitychange re-sync; on load adoptFromServer() adopts newer server state (balance/positions/pendings/deals + ticketSeq restore), converts server notes into Journal entries ("(trade server, platform closed)") and logs a summary; deals dedupe via wholesale replace + execSeq staleness check
+- Fixed a TS2367 (visibilityState 'unloaded' not in lib types) by simplifying the heartbeat guard
+- Browser-verified end-to-end: pending synced to server; browser CLOSED → t≈50s server activated sell limit #51000006 → position #51000007 (execSeq 1, note written); reopened → position adopted on Trade tab; set T/P 84540 via S/L·T/P dialog (pushed to server), closed browser again → t≈290s server hit the T/P: position closed at 84540, deal profit +8.80 (88 pts × 0.10 BTC lot, exact MT5 math), balance 10 000 → 10 008.80, execSeq 2; reopened → deal in mobile History AND desktop status bar shows Balance 10 008.80 (cross-client adoption)
+- UI regression: header without +, no chart FAB, one-click bar + countdown (11:59 on M15) intact, Trade FAB present; desktop 1440×900 pixel-identical; tsc + eslint clean; no console errors
+
+Stage Summary:
+- The clone now behaves like a real MT5 trade server: pendings, S/L, T/P and trailing stops execute around the clock on the server (TradingView hub) even with the platform closed, persist across restarts, and are adopted back into History/Journal on the next launch; mobile header/chart decluttered per request
+- Artifacts: NEW src/lib/trade-rules.ts, src/lib/server/executor.ts, src/app/api/trading/route.ts, .mt5-server-state.json (runtime store); EDITED stores/trading.ts, MobileApp.tsx, globals.css
+- Screenshots: scripts/mt5-server-adopt.png, mt5-mb-noplus.png, mt5-desk-final.png

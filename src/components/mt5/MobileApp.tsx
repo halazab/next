@@ -147,12 +147,8 @@ export function MobileApp() {
           </div>
         </div>
 
-        <button className="mb-hbtn mb-hbtn-plus" aria-label="New Order" onClick={() => app.openDialog('newOrder')}>
-          <svg width="20" height="20" viewBox="0 0 24 24" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
+        {/* right spacer — keeps the symbol info centred like the old + button did */}
+        <span className="mb-header-spacer" aria-hidden />
 
         {menuOpen && (
           <>
@@ -227,7 +223,6 @@ export function MobileApp() {
             <div className="mb-chart-holder">
               <ChartPanel countdown />
             </div>
-            <button className="mb-fab" aria-label="New Order" onClick={() => app.openDialog('newOrder')}>＋</button>
           </>
         )}
 

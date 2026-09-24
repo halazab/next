@@ -1102,6 +1102,9 @@ select.mt-input { height: 26px; }
 
 .mb-hbtn:active { background: var(--mt-chrome-active); }
 
+/* right spacer balancing the hamburger so the header info stays centred */
+.mb-header-spacer { width: 36px; flex-shrink: 0; }
+
 .mb-hbtn-plus { background: #3391ff; border-radius: 50%; }
 .mb-hbtn-plus:active { background: #2a7ad6; }
 
